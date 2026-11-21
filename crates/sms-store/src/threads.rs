@@ -358,7 +358,7 @@ impl Store {
     }
 
     pub fn set_archived(&mut self, thread_id: i64, archived: bool) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::write_tx(&mut self.conn)?;
         if archived {
             tx.execute(
                 "INSERT OR IGNORE INTO archived_threads(thread_id) VALUES (?1)",
@@ -381,7 +381,7 @@ impl Store {
     /// Block/unblock a sender (case-insensitive, JS `toLowerCase`).
     pub fn set_blocked(&mut self, sender: &str, blocked: bool) -> Result<()> {
         let lc = sender.to_lowercase();
-        let tx = self.conn.transaction()?;
+        let tx = crate::write_tx(&mut self.conn)?;
         if blocked {
             tx.execute(
                 "INSERT OR IGNORE INTO blocked_senders(sender) VALUES (?1)",
@@ -425,7 +425,7 @@ impl Store {
     }
 
     fn update_flag(&mut self, sql: &str, sms_id: i64) -> Result<bool> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::write_tx(&mut self.conn)?;
         let n = tx.execute(sql, [sms_id])?;
         if n > 0 {
             let t: i64 = tx.query_row(
@@ -441,7 +441,7 @@ impl Store {
 
     /// Port of store.ts `deleteMessagesByIds`; returns the number deleted.
     pub fn delete_messages(&mut self, ids: &[i64]) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::write_tx(&mut self.conn)?;
         let mut touched = std::collections::BTreeSet::new();
         let mut deleted = 0;
         for id in ids {

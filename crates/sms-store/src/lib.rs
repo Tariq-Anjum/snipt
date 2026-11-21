@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 use sms_engine::SmsEngine;
 
 pub mod finance;
@@ -37,6 +37,16 @@ pub enum StoreError {
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
+
+/// Write transaction that takes the RESERVED lock up front (`BEGIN
+/// IMMEDIATE`). Every read-modify-write path must use this: a deferred
+/// transaction that reads first cannot upgrade to a writer after another
+/// connection commits (`SQLITE_BUSY_SNAPSHOT` in WAL mode, which
+/// `busy_timeout` cannot resolve). With IMMEDIATE, contention waits on the
+/// busy timeout instead.
+pub(crate) fn write_tx(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
+    conn.transaction_with_behavior(TransactionBehavior::Immediate)
+}
 
 pub struct Store {
     pub(crate) conn: Connection,

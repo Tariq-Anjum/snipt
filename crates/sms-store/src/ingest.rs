@@ -143,7 +143,7 @@ impl Store {
     /// Classify and insert a batch in one transaction; threads touched are
     /// recomputed once each. Existing ids are skipped (idempotent re-import).
     pub fn ingest_batch(&mut self, messages: &[RawSms]) -> Result<IngestReport> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::write_tx(&mut self.conn)?;
         let mut report = IngestReport::default();
         let mut touched = BTreeSet::new();
         for sms in messages {
@@ -172,7 +172,7 @@ impl Store {
         if !is_valid_timestamp_ms(input.timestamp_ms.unwrap_or(now_ms)) {
             return Err(StoreError::Invalid("timestampMs out of range"));
         }
-        let tx = self.conn.transaction()?;
+        let tx = crate::write_tx(&mut self.conn)?;
         let normalized = js::trim(&input.sender).to_string();
         let existing: Option<(i64, Option<String>)> = tx
             .prepare_cached(

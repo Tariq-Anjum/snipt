@@ -205,7 +205,7 @@ impl Store {
 
     /// Port of store.ts `purgeExpiredOtpMessages`; returns purged message ids.
     pub fn purge_expired_otps(&mut self, now_ms: i64) -> Result<Vec<i64>> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::write_tx(&mut self.conn)?;
         let candidates: Vec<(i64, i64, i64, String)> = tx
             .prepare(
                 "SELECT id, thread_id, ts_ms, otp_json FROM messages
