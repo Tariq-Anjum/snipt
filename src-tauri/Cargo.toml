@@ -1,0 +1,37 @@
+[package]
+name = "snipt"
+version.workspace = true
+description = "Snipt: offline SMS organiser (Tauri shell over the sms-* crates)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+default-run = "snipt"
+
+[lib]
+name = "snipt_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "snipt"
+path = "src/main.rs"
+
+[features]
+# Exposes the `import_seed` command in release builds too. It is always
+# available in debug builds (`debug_assertions`).
+dev-seed = []
+
+[build-dependencies]
+tauri-build = { version = "=2.7.6", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.7", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+chrono.workspace = true
+sms-types.workspace = true
+sms-engine.workspace = true
+sms-store.workspace = true
+sms-crypto.workspace = true
+sms-testdata.workspace = true

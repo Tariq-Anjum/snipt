@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Least-privilege capability for the main window (Linux desktop): core defaults only; no shell, no fs, no network.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "linux"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}

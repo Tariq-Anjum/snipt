@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sms-types", "crates/sms-engine", "crates/sms-testdata", "crates/sms-crypto", "crates/sms-store"]
+members = ["crates/sms-types", "crates/sms-engine", "crates/sms-testdata", "crates/sms-crypto", "crates/sms-store", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
