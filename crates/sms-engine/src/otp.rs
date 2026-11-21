@@ -79,3 +79,51 @@ pub fn extract_otp(body: &str, sender_kind: &SenderKind) -> Option<ExtractedOtp>
     }
     None
 }
+
+/// Masks every occurrence of `code` in `body` that is not part of a longer
+/// ASCII digit run (the extractor only matches whole `\b`-bounded digit runs)
+/// with one U+2022 per character. Used wherever a body leaves the core
+/// without an explicit reveal (OTP list, previews, notifications).
+pub fn redact_otp_code(body: &str, code: &str) -> String {
+    if code.is_empty() {
+        return body.to_string();
+    }
+    let mask = "\u{2022}".repeat(code.chars().count());
+    let bytes = body.as_bytes();
+    let mut out = String::with_capacity(body.len());
+    let mut last = 0;
+    for (i, _) in body.match_indices(code) {
+        if i < last {
+            continue;
+        }
+        let end = i + code.len();
+        let digit_before = i > 0 && bytes[i - 1].is_ascii_digit();
+        let digit_after = end < bytes.len() && bytes[end].is_ascii_digit();
+        if digit_before || digit_after {
+            continue;
+        }
+        out.push_str(&body[last..i]);
+        out.push_str(&mask);
+        last = end;
+    }
+    out.push_str(&body[last..]);
+    out
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::redact_otp_code;
+
+    #[test]
+    fn masks_whole_digit_runs_only() {
+        assert_eq!(
+            redact_otp_code("482913 is your OTP. Ref 14829130, again 482913.", "482913"),
+            "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022} is your OTP. Ref 14829130, again \u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}."
+        );
+        assert_eq!(
+            redact_otp_code("G-392814é", "392814"),
+            "G-\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}é"
+        );
+        assert_eq!(redact_otp_code("no code here", ""), "no code here");
+    }
+}

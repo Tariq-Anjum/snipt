@@ -9,7 +9,10 @@ use sms_engine::{
     inbox::InboxFilter,
     thread::{classify_thread_classes, display_name},
 };
-use sms_types::{Category, Classification, ClassificationReason, SenderKind};
+use sms_types::{
+    Category, Classification, ClassificationReason, ExtractedOtp, ExtractedReminder,
+    ExtractedTransaction, SenderKind,
+};
 
 use crate::{Result, Store, StoreError};
 
@@ -30,6 +33,38 @@ pub struct ThreadRow {
     pub sim_slot: u8,
     pub is_rcs_capable: bool,
     pub message_count: i64,
+    /// Latest message body for the list row: OTP codes masked, line breaks
+    /// collapsed, at most [`PREVIEW_CHARS`] characters (store-only field; the
+    /// TS `ThreadSummary` carries the whole `latestMessage` instead).
+    pub preview: String,
+    pub preview_is_outgoing: bool,
+    /// The latest message carries an OTP (the code itself is not exposed here).
+    pub latest_has_otp: bool,
+    pub latest_transaction: Option<ExtractedTransaction>,
+    pub latest_reminder: Option<ExtractedReminder>,
+}
+
+/// Maximum preview length in Unicode scalar values (including the ellipsis).
+pub const PREVIEW_CHARS: usize = 140;
+
+/// Thread-list preview: redact the OTP, collapse whitespace runs to one space,
+/// cap at [`PREVIEW_CHARS`] characters.
+pub fn make_preview(body: &str, otp_code: Option<&str>) -> String {
+    let redacted = match otp_code {
+        Some(code) => sms_engine::otp::redact_otp_code(body, code),
+        None => body.to_string(),
+    };
+    let collapsed = redacted
+        .split(sms_types::js::is_js_whitespace)
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if collapsed.chars().count() <= PREVIEW_CHARS {
+        return collapsed;
+    }
+    let mut out: String = collapsed.chars().take(PREVIEW_CHARS - 1).collect();
+    out.push('\u{2026}');
+    out
 }
 
 /// Keyset cursor for the thread list: `(latest_ts, thread_id)` of the last row.
@@ -134,8 +169,56 @@ impl ThreadRowRaw {
             sim_slot: self.sim_slot,
             is_rcs_capable: self.is_rcs,
             message_count: self.msg_count,
+            preview: String::new(),
+            preview_is_outgoing: false,
+            latest_has_otp: false,
+            latest_transaction: None,
+            latest_reminder: None,
         })
     }
+}
+
+/// body, is_outgoing, otp_json, txn_json, reminder_json of the latest message.
+type LatestCols = (String, bool, Option<String>, Option<String>, Option<String>);
+
+/// Fill the preview fields of each row from its latest message (one primary
+/// key lookup per row; pages are at most 500 rows).
+pub(crate) fn attach_previews(conn: &Connection, rows: &mut [ThreadRow]) -> Result<()> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT body, is_outgoing, otp_json, txn_json, reminder_json FROM messages WHERE id = ?1",
+    )?;
+    for row in rows.iter_mut() {
+        let got: Option<LatestCols> = stmt
+            .query_row([row.latest_message_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .optional()?;
+        let Some((body, outgoing, otp, txn, reminder)) = got else {
+            continue;
+        };
+        let otp: Option<ExtractedOtp> = otp.map(|j| serde_json::from_str(&j)).transpose()?;
+        row.preview = make_preview(&body, otp.as_ref().map(|o| o.code.as_str()));
+        row.preview_is_outgoing = outgoing;
+        row.latest_has_otp = otp.is_some();
+        row.latest_transaction = txn.map(|j| serde_json::from_str(&j)).transpose()?;
+        row.latest_reminder = reminder.map(|j| serde_json::from_str(&j)).transpose()?;
+    }
+    Ok(())
+}
+
+/// Run a `SELECT {THREAD_COLS} ...` query and return finished rows with previews.
+pub(crate) fn query_rows(
+    conn: &Connection,
+    sql: &str,
+    args: impl rusqlite::Params,
+) -> Result<Vec<ThreadRow>> {
+    let mut stmt = conn.prepare_cached(sql)?;
+    let mut rows: Vec<ThreadRow> = stmt
+        .query_map(args, thread_from_row)?
+        .map(|r| r.map_err(Into::into).and_then(|(t,)| t.finish()))
+        .collect::<Result<_>>()?;
+    attach_previews(conn, &mut rows)?;
+    Ok(rows)
 }
 
 /// Recompute one thread row from its messages (or delete it when empty).
@@ -318,11 +401,7 @@ impl Store {
              ORDER BY latest_ts DESC, thread_id DESC LIMIT {}",
             limit + 1
         );
-        let mut stmt = self.conn.prepare_cached(&sql)?;
-        let mut threads: Vec<ThreadRow> = stmt
-            .query_map(rusqlite::params_from_iter(args), thread_from_row)?
-            .map(|r| r.map_err(Into::into).and_then(|(t,)| t.finish()))
-            .collect::<Result<_>>()?;
+        let mut threads = query_rows(&self.conn, &sql, rusqlite::params_from_iter(args))?;
         let next = if threads.len() > limit {
             threads.truncate(limit);
             threads.last().map(|t| ThreadCursor {
@@ -339,22 +418,12 @@ impl Store {
     pub fn all_threads(&self) -> Result<Vec<ThreadRow>> {
         let sql =
             format!("SELECT {THREAD_COLS} FROM threads ORDER BY latest_ts DESC, thread_id DESC");
-        let mut stmt = self.conn.prepare_cached(&sql)?;
-        let rows = stmt
-            .query_map([], thread_from_row)?
-            .map(|r| r.map_err(Into::into).and_then(|(t,)| t.finish()))
-            .collect::<Result<_>>()?;
-        Ok(rows)
+        query_rows(&self.conn, &sql, [])
     }
 
     pub fn thread(&self, thread_id: i64) -> Result<Option<ThreadRow>> {
         let sql = format!("SELECT {THREAD_COLS} FROM threads WHERE thread_id = ?1");
-        let raw = self
-            .conn
-            .prepare_cached(&sql)?
-            .query_row([thread_id], thread_from_row)
-            .optional()?;
-        raw.map(|(t,)| t.finish()).transpose()
+        Ok(query_rows(&self.conn, &sql, [thread_id])?.pop())
     }
 
     pub fn set_archived(&mut self, thread_id: i64, archived: bool) -> Result<()> {

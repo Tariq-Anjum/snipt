@@ -15,7 +15,7 @@ use sms_engine::inbox::{InboxFilter, search_tokens};
 
 use crate::{
     Result, Store,
-    threads::{THREAD_COLS, ThreadRow, filter_sql, thread_from_row},
+    threads::{THREAD_COLS, ThreadRow, attach_previews, filter_sql, thread_from_row},
 };
 
 const WINDOW: i64 = 60;
@@ -64,7 +64,9 @@ impl Store {
             .map(|r| r.map_err(Into::into).and_then(|(t,)| t.finish()))
             .collect::<Result<_>>()?;
         if tokens.is_empty() {
-            return Ok(candidates.into_iter().take(limit).collect());
+            let mut rows: Vec<ThreadRow> = candidates.into_iter().take(limit).collect();
+            attach_previews(&self.conn, &mut rows)?;
+            return Ok(rows);
         }
 
         // Per-thread recency cutoff (ts, ins_seq) of the 60th newest message.
@@ -141,10 +143,12 @@ impl Store {
             }
         }
         let matched = matched.unwrap_or_default();
-        Ok(candidates
+        let mut rows: Vec<ThreadRow> = candidates
             .into_iter()
             .filter(|t| matched.contains(&t.thread_id))
             .take(limit)
-            .collect())
+            .collect();
+        attach_previews(&self.conn, &mut rows)?;
+        Ok(rows)
     }
 }
