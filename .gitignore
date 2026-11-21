@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+web-dist/
+src-tauri/target/
+target/
+src-tauri/gen/android/keystore.properties
+*.jks
+*.keystore
