@@ -22,21 +22,21 @@ import {
 import { formatCountdown, formatFullDateTime } from '../utils/format';
 import { CloudBackupSection } from './CloudBackupSection';
 
-export type ReminderRow = ReminderItem & { isDone: boolean };
-
 interface RemindersViewProps {
   preferredCloudProvider: CloudBackupProvider;
   onChangeCloudProvider: (provider: CloudBackupProvider) => void;
   lastBackupAtMs: number | null;
   onBackupSuccess: (timestampMs: number) => void;
   onRestored: (report: RestoreReport) => void;
+  readOnly: boolean;
   otps: OtpItemView[];
-  reminders: ReminderRow[];
+  reminders: ReminderItem[];
   remindersLoading: boolean;
   weeklyScan: WeeklyScanReport | null;
   scanScheduleDay: string;
   onChangeScanScheduleDay: (day: string) => void;
   onApplyCleanup: (buckets: CleanupBucketId[]) => Promise<number>;
+  onPurgeExpiredOtps: () => Promise<number>;
   onCopyOtp: (code: string) => void;
   clipboardClearSecondsLeft: number | null;
   onToggleReminderDone: (smsId: number) => void;
@@ -65,6 +65,7 @@ export function RemindersView({
   lastBackupAtMs,
   onBackupSuccess,
   onRestored,
+  readOnly,
   otps,
   reminders,
   remindersLoading,
@@ -72,6 +73,7 @@ export function RemindersView({
   scanScheduleDay,
   onChangeScanScheduleDay,
   onApplyCleanup,
+  onPurgeExpiredOtps,
   onCopyOtp,
   clipboardClearSecondsLeft,
   onToggleReminderDone,
@@ -158,7 +160,7 @@ export function RemindersView({
   };
 
   const handlePurge = async () => {
-    const removed = await onApplyCleanup(['expired_otps']).catch(() => 0);
+    const removed = await onPurgeExpiredOtps().catch(() => 0);
     setPurgeNotice(
       removed > 0
         ? `Purged ${removed} expired OTP message${removed === 1 ? '' : 's'} from encrypted vault.`
@@ -195,6 +197,7 @@ export function RemindersView({
           lastBackupAtMs={lastBackupAtMs}
           onBackupSuccess={onBackupSuccess}
           onRestored={onRestored}
+          readOnly={readOnly}
         />
 
         {/* Section 1: Weekly Useless SMS Scan (Categorized Cleanup) */}

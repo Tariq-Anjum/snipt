@@ -14,18 +14,25 @@ import { generateBulkHistoryMessages } from '../engine/indexedDb';
 import { createEncryptedBackup, restoreEncryptedBackup, buildBackupFilename } from '../engine/backup';
 import { createSeedMessages } from '../engine/seedData';
 import {
+  appendOutgoingReply,
   buildThreads,
   collectOtpItems,
+  collectReminders,
   computeFinanceSummary,
   filterThreads,
   ingestIncomingSms,
+  purgeExpiredOtpMessages,
   type StoreState,
 } from '../engine/store';
 import { translateSmsToEnglish } from '../engine/translate';
-import type { BudgetLimits, PaymentCycleConfig, ThreadSummary } from '../engine/types';
+import type { BudgetLimits, ParsedSms, PaymentCycleConfig, ThreadSummary } from '../engine/types';
 import type {
+  Capabilities,
+  InboxCounts,
   InboxFilter,
   MessageCursor,
+  MessageView,
+  SendStatus,
   ThreadCursor,
   ThreadRow,
 } from './types';
@@ -41,6 +48,47 @@ let state: StoreState = {
 let cycle: PaymentCycleConfig = { ...DEFAULT_CYCLE_CONFIG };
 let limits: BudgetLimits = { ...DEFAULT_BUDGET_LIMITS };
 let threadCache: ThreadSummary[] | null = null;
+const sendStatus = new Map<number, SendStatus>();
+
+// Browser preview behaves like a phone so the compose bar can be exercised.
+const DEV_CAPS: Capabilities = {
+  platform: 'web',
+  canSend: true,
+  readOnly: false,
+  defaultSmsRole: false,
+  rcs: false,
+  mms: false,
+  simSlots: 2,
+};
+
+/** Mirror of sms-engine `redact_otp_code` (whole digit runs only). */
+function redact(body: string, code: string): string {
+  if (!code) return body;
+  const mask = '•'.repeat(code.length);
+  return body.replace(new RegExp(`(?<![0-9])${code}(?![0-9])`, 'g'), mask);
+}
+
+function redactParsed(p: ParsedSms): ParsedSms {
+  if (!p.otp) return p;
+  return {
+    ...p,
+    sms: { ...p.sms, body: redact(p.sms.body, p.otp.code) },
+    otp: { ...p.otp, code: '•'.repeat(p.otp.code.length) },
+  };
+}
+
+function preview(p: ParsedSms): string {
+  const text = (p.otp ? redact(p.sms.body, p.otp.code) : p.sms.body)
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(' ');
+  return [...text].length <= 140 ? text : `${[...text].slice(0, 139).join('')}…`;
+}
+
+const view = (m: ParsedSms): MessageView => {
+  const st = sendStatus.get(m.sms.id);
+  return st ? { ...m, sendStatus: st } : m;
+};
 
 const touch = () => {
   threadCache = null;
@@ -63,6 +111,40 @@ function toRow(t: ThreadSummary): ThreadRow {
     simSlot: t.simSlot,
     isRcsCapable: t.isRcsCapable,
     messageCount: t.messages.length,
+    preview: preview(t.latestMessage),
+    previewIsOutgoing: t.latestMessage.sms.isOutgoing,
+    latestHasOtp: t.latestMessage.otp !== null,
+    latestTransaction: t.latestMessage.transaction,
+    latestReminder: t.latestMessage.reminder,
+  };
+}
+
+function rowFor(threadId: number): ThreadRow | null {
+  const t = threads().find((x) => x.threadId === threadId);
+  return t ? toRow(t) : null;
+}
+
+function counts(): InboxCounts {
+  const ts = threads();
+  const live = ts.filter((t) => !t.isArchived);
+  const cat = (c: string) => live.filter((t) => t.classification.category === c).length;
+  return {
+    totalMessages: state.messages.length,
+    unread: live
+      .filter((t) => t.classification.category !== 'Spam')
+      .reduce((n, t) => n + t.unreadCount, 0),
+    filters: {
+      All: live.filter((t) => t.classification.category !== 'Spam').length,
+      Personal: cat('Personal'),
+      Transactions: cat('Transactions'),
+      Promotions: cat('Promotions'),
+      Priority: cat('Priority'),
+      Spam: cat('Spam'),
+      RCS: live.filter((t) => t.isRcsCapable).length,
+      Starred: live.filter((t) => t.hasStarred).length,
+      Archived: ts.length - live.length,
+    },
+    capacity: 10_000,
   };
 }
 
@@ -115,7 +197,7 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
       const page = all.slice(start, start + limit);
       const last = page[page.length - 1];
       return {
-        messages: page,
+        messages: page.map(view),
         next:
           start + limit < all.length && last
             ? { tsMs: last.sms.timestampMs, id: last.sms.id }
@@ -187,11 +269,71 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
       touch();
       return del.size;
     }
+    case 'get_thread':
+      return rowFor(a.threadId);
+    case 'inbox_counts':
+      return counts();
+    case 'reminders':
+      return collectReminders(threads(), state.completedReminderSmsIds);
+    case 'set_reminder_done': {
+      const rest = state.completedReminderSmsIds.filter((id) => id !== a.smsId);
+      state = { ...state, completedReminderSmsIds: a.done ? [...rest, a.smsId] : rest };
+      return null;
+    }
+    case 'get_settings':
+      return { cycleConfig: cycle, budgetLimits: limits };
+    case 'purge_expired_otps': {
+      const { nextState, purgedCount } = purgeExpiredOtpMessages(state, Date.now());
+      state = nextState;
+      touch();
+      return purgedCount;
+    }
+    case 'ingest_incoming': {
+      const { nextState, createdSms } = ingestIncomingSms(state, {
+        ...(a.message as Parameters<typeof ingestIncomingSms>[1]),
+        timestampMs: a.message.timestampMs ?? Date.now(),
+      });
+      state = nextState;
+      touch();
+      const parsed = defaultEngine.analyzeMessage(createdSms);
+      const thread = rowFor(createdSms.threadId)!;
+      return {
+        inserted: true,
+        thread,
+        notification: {
+          notify: !thread.isBlocked && thread.classification.category !== 'Spam',
+          title: thread.displayName,
+          message: redactParsed(parsed),
+          otpVault: parsed.otp ? await encryptOtpCode(parsed.otp.code) : null,
+          otpExpiresAtMs: parsed.otp
+            ? createdSms.timestampMs + parsed.otp.ttlSeconds * 1000
+            : null,
+        },
+      };
+    }
+    case 'queue_outgoing': {
+      const m = a.message as { threadId?: number; body: string; simSlot: 0 | 1 };
+      if (m.threadId === undefined || !m.body.trim()) throw new Error('invalid input');
+      const before = state.messages.length;
+      state = appendOutgoingReply(state, m.threadId, m.body, m.simSlot, 'SMS');
+      if (state.messages.length === before) throw new Error('invalid input: unknown thread');
+      touch();
+      const raw = state.messages[state.messages.length - 1];
+      sendStatus.set(raw.id, 'queued');
+      return {
+        message: view(defaultEngine.analyzeMessage(raw)),
+        thread: rowFor(raw.threadId),
+      };
+    }
     case 'otp_items':
       return Promise.all(
         collectOtpItems(threads(), Date.now()).map(async (item) => ({
           vault: await encryptOtpCode(item.otp.code),
-          item: { ...item, otp: { ...item.otp, code: '•'.repeat(item.otp.code.length) } },
+          item: {
+            ...item,
+            body: redact(item.body, item.otp.code),
+            otp: { ...item.otp, code: '•'.repeat(item.otp.code.length) },
+          },
         }))
       );
     case 'vault_reveal':
@@ -239,7 +381,7 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
       };
     }
     case 'capabilities':
-      return { platform: 'web' };
+      return DEV_CAPS;
     case 'import_seed': {
       const before = state.messages.length;
       state = { ...state, messages: generateBulkHistoryMessages(10_000, state.messages, Date.now()) };
@@ -249,15 +391,6 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
         skippedExisting: 0,
         threadsTouched: threads().length,
       };
-    }
-    case 'dev_ingest': {
-      const { nextState, createdSms } = ingestIncomingSms(state, {
-        ...(a as Parameters<typeof ingestIncomingSms>[1]),
-        timestampMs: Date.now(),
-      });
-      state = nextState;
-      touch();
-      return defaultEngine.analyzeMessage(createdSms);
     }
     default:
       throw new Error(`devFallback: unknown command ${cmd}`);

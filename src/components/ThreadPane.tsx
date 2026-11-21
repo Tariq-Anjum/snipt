@@ -10,20 +10,24 @@ import {
   EyeOff,
   Languages,
   Lock,
+  Send,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
   Star,
   Trash2,
 } from 'lucide-react';
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import {
   archiveThread,
   blockSender,
   deleteMessages,
   markRead,
+  queueOutgoing,
   starMessage,
-  type ParsedSms,
+  type Capabilities,
+  type MessageView,
+  type SendStatus,
   type ThreadRow,
 } from '../api';
 import { useThreadMessages, useTranslation } from '../hooks/data';
@@ -46,17 +50,26 @@ interface ThreadPaneProps {
   onBack: () => void;
   onChanged: () => void;
   onThreadPatched: (patch: Partial<ThreadRow>) => void;
+  caps: Capabilities;
 }
 
+const SEND_STATUS_LABEL: Record<SendStatus, string> = {
+  queued: 'Queued',
+  sending: 'Sending...',
+  sent: 'Sent',
+  delivered: 'Delivered',
+  failed: 'Not sent',
+};
+
 interface BubbleProps {
-  parsed: ParsedSms;
+  parsed: MessageView;
   nowMs: number;
   autoTranslate: boolean;
   isDone: boolean;
   onToggleReminderDone: (smsId: number) => void;
   onCopyOtp: (code: string) => void;
-  onStar: (m: ParsedSms) => void;
-  onDelete: (m: ParsedSms) => void;
+  onStar: (m: MessageView) => void;
+  onDelete: (m: MessageView) => void;
 }
 
 const Bubble = memo(function Bubble({
@@ -268,6 +281,17 @@ const Bubble = memo(function Bubble({
             <span>{sms.rcsStatus === 'read' ? 'Read' : 'Delivered'}</span>
           </span>
         )}
+        {isOut && parsed.sendStatus && (
+          <span
+            className={
+              parsed.sendStatus === 'failed'
+                ? 'font-medium text-red-700 dark:text-red-400'
+                : 'text-slate-500 dark:text-slate-400'
+            }
+          >
+            {SEND_STATUS_LABEL[parsed.sendStatus]}
+          </span>
+        )}
         <button
           type="button"
           onClick={() => onStar(parsed)}
@@ -306,12 +330,15 @@ export function ThreadPane({
   onBack,
   onChanged,
   onThreadPatched,
+  caps,
 }: ThreadPaneProps) {
   const [showInspector, setShowInspector] = useState(false);
-  const { messages, hasOlder, loadOlder, patch, openedAt, prepended } = useThreadMessages(
-    thread.threadId,
-    version
-  );
+  const { messages, hasOlder, loadOlder, patch, append, openedAt, prepended } =
+    useThreadMessages(thread.threadId, version);
+  const [replyText, setReplyText] = useState('');
+  const [replySim, setReplySim] = useState<0 | 1>(thread.simSlot);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const done = new Set(completedReminderIds);
 
@@ -361,13 +388,32 @@ export function ThreadPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
 
-  const handleStar = (m: ParsedSms) => {
+  const handleSend = async (e: FormEvent) => {
+    e.preventDefault();
+    const body = replyText.trim();
+    if (!body || sending || !caps.canSend) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      const r = await queueOutgoing({ threadId: thread.threadId, body, simSlot: replySim });
+      setReplyText('');
+      append(r.message);
+      onThreadPatched(r.thread);
+      onChanged();
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : 'Could not queue the message.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleStar = (m: MessageView) => {
     const starred = !m.sms.isStarred;
     patch(m.sms.id, (x) => ({ ...x, sms: { ...x.sms, isStarred: starred } }));
     starMessage(m.sms.id, starred).then(onChanged).catch(onChanged);
   };
 
-  const handleDelete = (m: ParsedSms) => {
+  const handleDelete = (m: MessageView) => {
     patch(m.sms.id, () => null);
     deleteMessages([m.sms.id]).then(onChanged).catch(onChanged);
   };
@@ -545,7 +591,7 @@ export function ThreadPane({
 
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto smooth-scroll-layer px-4 md:px-6 py-5 pb-24 md:pb-5"
+        className="flex-1 overflow-y-auto smooth-scroll-layer px-4 md:px-6 py-5"
       >
         {hasOlder && (
           <div className="text-center pb-4">
@@ -590,6 +636,52 @@ export function ThreadPane({
           })}
         </div>
       </div>
+
+      {caps.canSend ? (
+        <form
+          onSubmit={handleSend}
+          className="bg-white dark:bg-slate-900 glass-chrome border-t border-slate-200 dark:border-slate-800 px-4 md:px-6 py-3 mb-16 md:mb-0"
+        >
+          <div className="flex items-center gap-2">
+            {caps.simSlots > 1 && (
+              <button
+                type="button"
+                onClick={() => setReplySim((s) => (s === 0 ? 1 : 0))}
+                aria-label={`Switch sending SIM (currently SIM ${replySim + 1})`}
+                className="px-2.5 py-2 text-xs font-mono font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 min-h-[40px] text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700"
+              >
+                SIM {replySim + 1}
+              </button>
+            )}
+            <input
+              type="text"
+              aria-label={`Reply to ${thread.displayName}`}
+              value={replyText}
+              onChange={(e) => setReplyText(e.target.value)}
+              placeholder={`SMS to ${thread.displayName} via SIM ${replySim + 1}...`}
+              className="flex-1 min-w-0 px-3.5 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 min-h-[40px]"
+            />
+            <button
+              type="submit"
+              disabled={!replyText.trim() || sending}
+              aria-label="Send message reply"
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 disabled:opacity-40 disabled:cursor-not-allowed dark:bg-blue-600 dark:hover:bg-blue-500 rounded-lg transition-colors shrink-0 min-h-[40px]"
+            >
+              <Send className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">{sending ? 'Queuing...' : 'Send'}</span>
+            </button>
+          </div>
+          {sendError && (
+            <p role="alert" className="mt-1.5 text-[11px] text-red-700 dark:text-red-400">
+              {sendError}
+            </p>
+          )}
+        </form>
+      ) : (
+        <div className="bg-white dark:bg-slate-900 glass-chrome border-t border-slate-200 dark:border-slate-800 px-4 md:px-6 py-2.5 mb-16 md:mb-0 text-[11px] text-slate-500 dark:text-slate-400">
+          Read-only here: this device shows your phone&apos;s backup. Reply from Snipt on your phone.
+        </div>
+      )}
     </>
   );
 }

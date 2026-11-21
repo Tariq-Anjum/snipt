@@ -6,18 +6,25 @@ import {
   capabilities,
   deleteMessages,
   financeSummary as fetchFinanceSummary,
+  getSettings,
+  getThread,
+  inboxCounts as fetchInboxCounts,
+  ingestIncoming,
   isTauri,
   markRead,
   otpItems as fetchOtpItems,
   powerSaveActive,
-  scanReminders,
+  purgeExpiredOtps,
+  queueOutgoing,
+  reminders as fetchReminders,
   setBackHandler,
   setBudget,
   setCycle,
-  threadFromMessages,
+  setReminderDone,
   threadsPage,
   weeklyScan as fetchWeeklyScan,
   DEFAULT_CYCLE_CONFIG,
+  READ_ONLY_CAPABILITIES,
   type BudgetCategoryId,
   type BudgetLimits,
   type BudgetPlannerSummary,
@@ -25,9 +32,11 @@ import {
   type CleanupBucketId,
   type CloudBackupProvider,
   type FinanceSummary,
+  type InboxCounts,
   type InboxFilter,
+  type IncomingSms,
+  type NotificationPayload,
   type OtpItemView,
-  type ParsedSms,
   type PaymentCycleConfig,
   type PaymentMethod,
   type ReminderItem,
@@ -35,11 +44,11 @@ import {
   type ThreadRow,
   type WeeklyScanReport,
 } from './api';
-import { devImportSeed, devIngest } from './api/dev';
+import { devImportSeed } from './api/dev';
 import { FinanceView } from './components/FinanceView';
 import { InboxView } from './components/InboxView';
 import { NotificationBanner } from './components/NotificationBanner';
-import { RemindersView, type ReminderRow } from './components/RemindersView';
+import { RemindersView } from './components/RemindersView';
 import { TopBar, type ActiveTab, type DesignStyle } from './components/TopBar';
 import { useDebounced } from './hooks/data';
 import { popBack, subscribeBack, useBackLayer } from './utils/backStack';
@@ -62,9 +71,9 @@ const THEME_KEY = 'snipt-theme-v1';
 const STYLE_KEY = 'snipt-design-style-v1';
 const PREFS_KEY = 'snipt-prefs-v1';
 
+// UI-only preferences. Data state (reminder completion, billing cycles, budget)
+// lives in the Rust core and is read through commands, never mirrored here.
 interface Prefs {
-  completedReminderSmsIds: number[];
-  cycleConfig: PaymentCycleConfig | null;
   scanScheduleDay: string;
   autoTranslateToEnglish: boolean;
   preferredCloudProvider: CloudBackupProvider;
@@ -72,8 +81,6 @@ interface Prefs {
 }
 
 const DEFAULT_PREFS: Prefs = {
-  completedReminderSmsIds: [],
-  cycleConfig: null,
   scanScheduleDay: 'Every Sunday · 9:00 AM',
   autoTranslateToEnglish: true,
   preferredCloudProvider: 'device_picker',
@@ -83,7 +90,16 @@ const DEFAULT_PREFS: Prefs = {
 function loadPrefs(): Prefs {
   try {
     const raw = window.localStorage.getItem(PREFS_KEY);
-    if (raw) return { ...DEFAULT_PREFS, ...(JSON.parse(raw) as Partial<Prefs>) };
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<Prefs>;
+      // Pick known keys only: drops data mirrors written by earlier builds.
+      return {
+        scanScheduleDay: p.scanScheduleDay ?? DEFAULT_PREFS.scanScheduleDay,
+        autoTranslateToEnglish: p.autoTranslateToEnglish ?? DEFAULT_PREFS.autoTranslateToEnglish,
+        preferredCloudProvider: p.preferredCloudProvider ?? DEFAULT_PREFS.preferredCloudProvider,
+        lastBackupAtMs: p.lastBackupAtMs ?? DEFAULT_PREFS.lastBackupAtMs,
+      };
+    }
   } catch {
     // ignore malformed storage
   }
@@ -112,9 +128,9 @@ function getInitialDesignStyle(): DesignStyle {
 
 export default function App() {
   const [prefs, setPrefs] = useState<Prefs>(() => loadPrefs());
-  const [cycleConfig, setCycleConfig] = useState<PaymentCycleConfig>(
-    () => prefs.cycleConfig ?? { ...DEFAULT_CYCLE_CONFIG }
-  );
+  const [cycleConfig, setCycleConfig] = useState<PaymentCycleConfig>(() => ({
+    ...DEFAULT_CYCLE_CONFIG,
+  }));
   const [onlyActiveCycle, setOnlyActiveCycle] = useState(true);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => getInitialTheme());
   const [designStyle, setDesignStyle] = useState<DesignStyle>(() => getInitialDesignStyle());
@@ -122,7 +138,8 @@ export default function App() {
     () => !glassSupported() || prefersReducedTransparency()
   );
   const [notice, setNotice] = useState<string | null>(null);
-  const [platform, setPlatform] = useState<Capabilities['platform']>('linux');
+  const [caps, setCaps] = useState<Capabilities>(READ_ONLY_CAPABILITIES);
+  const platform = caps.platform;
 
   const [version, setVersion] = useState(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
@@ -134,7 +151,9 @@ export default function App() {
   const debouncedQuery = useDebounced(searchQuery, 150);
   const [selectedThread, setSelectedThread] = useState<ThreadRow | null>(null);
   const [simulateOpen, setSimulateOpen] = useState(false);
-  const [latestNotification, setLatestNotification] = useState<ParsedSms | null>(null);
+  const [latestNotification, setLatestNotification] = useState<NotificationPayload | null>(
+    null
+  );
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [isLoadingSample, setIsLoadingSample] = useState(false);
   const [clipboardClearSecondsLeft, setClipboardClearSecondsLeft] = useState<number | null>(null);
@@ -143,9 +162,9 @@ export default function App() {
   const [budget, setBudgetState] = useState<BudgetPlannerSummary | null>(null);
   const [otps, setOtps] = useState<OtpItemView[]>([]);
   const [scan, setScan] = useState<WeeklyScanReport | null>(null);
-  const [reminderItems, setReminderItems] = useState<ReminderItem[]>([]);
+  const [reminders, setReminders] = useState<ReminderItem[]>([]);
   const [remindersLoading, setRemindersLoading] = useState(true);
-  const [unreadHint, setUnreadHint] = useState(0);
+  const [counts, setCounts] = useState<InboxCounts | null>(null);
 
   const glassActive = designStyle === 'glass' && !degraded;
 
@@ -163,7 +182,7 @@ export default function App() {
   // ---- platform + back-stack --------------------------------------------
   useEffect(() => {
     capabilities()
-      .then((c) => setPlatform(c.platform))
+      .then(setCaps)
       .catch(() => {});
   }, []);
 
@@ -265,10 +284,11 @@ export default function App() {
   }, [clipboardClearSecondsLeft]);
 
   // ---- data -----------------------------------------------------------------
-  // Push a user-chosen billing cycle to the core once (no getter command yet).
+  // Billing cycles are owned by the core.
   useEffect(() => {
-    if (prefs.cycleConfig) setCycle(prefs.cycleConfig).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    getSettings()
+      .then((s) => setCycleConfig(s.cycleConfig))
+      .catch(() => {});
   }, []);
 
   // Dev-seed builds only (VITE_DEV_SEED=1): fill an empty database once.
@@ -279,10 +299,10 @@ export default function App() {
       .catch(() => {});
   }, [bump]);
 
-  // Unread badge: approximated from the newest 100 non-archived threads.
+  // Unread badge, sidebar counts and the 10,000 capacity meter (one query).
   useEffect(() => {
-    threadsPage('All', 'all', null, 100)
-      .then((p) => setUnreadHint(p.threads.reduce((sum, t) => sum + t.unreadCount, 0)))
+    fetchInboxCounts()
+      .then(setCounts)
       .catch(() => {});
   }, [version]);
 
@@ -316,44 +336,51 @@ export default function App() {
     };
   }, [activeTab, version]);
 
-  // Reminders feed the tab badge, so scan shortly after startup and on changes.
+  // Reminders feed the tab badge, so load them at startup and on changes.
   useEffect(() => {
     let live = true;
-    setRemindersLoading(true);
-    const id = window.setTimeout(() => {
-      scanReminders()
-        .then((r) => live && setReminderItems(r))
-        .catch(() => {})
-        .finally(() => live && setRemindersLoading(false));
-    }, 800);
+    fetchReminders()
+      .then((r) => live && setReminders(r))
+      .catch(() => {})
+      .finally(() => live && setRemindersLoading(false));
     return () => {
       live = false;
-      window.clearTimeout(id);
     };
   }, [version]);
 
-  const doneSet = new Set(prefs.completedReminderSmsIds);
-  const reminders: ReminderRow[] = reminderItems
-    .map((r) => ({ ...r, isDone: doneSet.has(r.smsId) }))
-    .sort((a, b) => Number(a.isDone) - Number(b.isDone) || b.timestampMs - a.timestampMs);
   const pendingRemindersCount = reminders.filter((r) => !r.isDone).length;
+  const completedReminderIds = reminders.filter((r) => r.isDone).map((r) => r.smsId);
 
   // ---- handlers ---------------------------------------------------------------
   const handleJumpToThread = useCallback(async (threadId: number) => {
     setActiveTab('inbox');
     setInboxFilter('All');
     setSearchQuery('');
-    const row = await threadFromMessages(threadId).catch(() => null);
+    const row = await getThread(threadId).catch(() => null);
     if (row) setSelectedThread(row);
   }, []);
 
   const handleToggleReminderDone = (smsId: number) => {
-    const exists = prefs.completedReminderSmsIds.includes(smsId);
-    patchPrefs({
-      completedReminderSmsIds: exists
-        ? prefs.completedReminderSmsIds.filter((id) => id !== smsId)
-        : [...prefs.completedReminderSmsIds, smsId],
-    });
+    const done = !reminders.find((r) => r.smsId === smsId)?.isDone;
+    setReminders((prev) =>
+      prev
+        .map((r) => (r.smsId === smsId ? { ...r, isDone: done } : r))
+        .sort((a, b) => Number(a.isDone) - Number(b.isDone) || b.timestampMs - a.timestampMs)
+    );
+    setReminderDone(smsId, done)
+      .then(bump)
+      .catch(bump);
+  };
+
+  const handlePurgeExpiredOtps = async (): Promise<number> => {
+    const removed = await purgeExpiredOtps();
+    bump();
+    return removed;
+  };
+
+  const handleQuickReply = async (threadId: number, body: string, simSlot: 0 | 1) => {
+    await queueOutgoing({ threadId, body, simSlot });
+    bump();
   };
 
   const handleCopyOtp = (code: string) => {
@@ -370,10 +397,13 @@ export default function App() {
   const handleChangeCycleDay = (method: PaymentMethod, day: number) => {
     const next = { ...cycleConfig, [method]: day };
     setCycleConfig(next);
-    patchPrefs({ cycleConfig: next });
     setCycle(next)
       .then(bump)
-      .catch(() => {});
+      .catch(() => {
+        getSettings()
+          .then((s) => setCycleConfig(s.cycleConfig))
+          .catch(() => {});
+      });
   };
 
   const budgetRef = useRef<BudgetPlannerSummary | null>(null);
@@ -409,16 +439,16 @@ export default function App() {
       .finally(() => setIsLoadingSample(false));
   };
 
-  const handleDeliverSimulatedSms = (payload: Parameters<typeof devIngest>[0]) => {
-    devIngest(payload)
-      .then(async (parsed) => {
+  // Dev simulator: goes through the same ingest command as the Android receiver.
+  const handleDeliverSimulatedSms = (payload: IncomingSms) => {
+    ingestIncoming(payload)
+      .then((r) => {
         setNowMs(Date.now());
-        setLatestNotification(parsed);
+        if (r.notification.notify) setLatestNotification(r.notification);
         setActiveTab('inbox');
-        setInboxFilter(parsed.classification.category === 'Spam' ? 'Spam' : 'All');
+        setInboxFilter(r.thread.classification.category === 'Spam' ? 'Spam' : 'All');
         bump();
-        const row = await threadFromMessages(parsed.sms.threadId);
-        if (row) setSelectedThread(row);
+        setSelectedThread(r.thread);
       })
       .catch(() => {});
   };
@@ -458,7 +488,7 @@ export default function App() {
             activeTab={activeTab}
             onSelectTab={setActiveTab}
             onOpenSimulate={import.meta.env.DEV ? () => setSimulateOpen(true) : undefined}
-            unreadCount={unreadHint}
+            unreadCount={counts?.unread ?? 0}
             pendingReminderCount={pendingRemindersCount}
             designStyle={glassActive ? 'glass' : 'solid'}
           />
@@ -486,8 +516,10 @@ export default function App() {
                   setSelectedThread((prev) => (prev ? { ...prev, ...patch } : prev))
                 }
                 onChanged={bump}
+                counts={counts}
+                caps={caps}
                 onCopyOtp={handleCopyOtp}
-                completedReminderIds={prefs.completedReminderSmsIds}
+                completedReminderIds={completedReminderIds}
                 onToggleReminderDone={handleToggleReminderDone}
                 theme={theme}
                 onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
@@ -535,8 +567,12 @@ export default function App() {
                 onBackupSuccess={(t) => patchPrefs({ lastBackupAtMs: t })}
                 onRestored={() => {
                   setSelectedThread(null);
+                  getSettings()
+                    .then((s) => setCycleConfig(s.cycleConfig))
+                    .catch(() => {});
                   bump();
                 }}
+                readOnly={caps.readOnly}
                 otps={otps}
                 reminders={reminders}
                 remindersLoading={remindersLoading}
@@ -544,6 +580,7 @@ export default function App() {
                 scanScheduleDay={prefs.scanScheduleDay}
                 onChangeScanScheduleDay={(d) => patchPrefs({ scanScheduleDay: d })}
                 onApplyCleanup={handleApplyCleanup}
+                onPurgeExpiredOtps={handlePurgeExpiredOtps}
                 onCopyOtp={handleCopyOtp}
                 clipboardClearSecondsLeft={clipboardClearSecondsLeft}
                 onToggleReminderDone={handleToggleReminderDone}
@@ -564,12 +601,13 @@ export default function App() {
           )}
 
           <NotificationBanner
-            parsed={latestNotification}
+            notification={latestNotification}
             onDismiss={() => setLatestNotification(null)}
             onOpenThread={handleJumpToThread}
             onCopyOtp={handleCopyOtp}
             onMarkRead={(id) => markRead(id).then(bump).catch(() => {})}
             onDeleteSms={(id) => deleteMessages([id]).then(bump).catch(() => {})}
+            onQuickReply={caps.canSend ? handleQuickReply : undefined}
           />
 
           {notice && (

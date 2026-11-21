@@ -11,8 +11,15 @@ import {
 import { memo, useEffect, useRef } from 'react';
 import type { DesignStyle } from './TopBar';
 import { ThreadPane } from './ThreadPane';
-import type { Category, InboxFilter, SimFilter, ThreadRow } from '../api';
-import { useThreadList, useThreadPreview, useTranslation } from '../hooks/data';
+import type {
+  Capabilities,
+  Category,
+  InboxCounts,
+  InboxFilter,
+  SimFilter,
+  ThreadRow,
+} from '../api';
+import { useThreadList, useTranslation } from '../hooks/data';
 import { formatInr, formatShortTime, getInitials } from '../utils/format';
 
 interface InboxViewProps {
@@ -28,6 +35,8 @@ interface InboxViewProps {
   onSelectThread: (thread: ThreadRow | null) => void;
   onThreadPatched: (patch: Partial<ThreadRow>) => void;
   onChanged: () => void;
+  counts: InboxCounts | null;
+  caps: Capabilities;
   onCopyOtp: (code: string) => void;
   completedReminderIds: number[];
   onToggleReminderDone: (smsId: number) => void;
@@ -56,6 +65,15 @@ const PRIMARY_FILTERS: InboxFilter[] = [
 const SECONDARY_FILTERS: InboxFilter[] = ['RCS', 'Starred', 'Archived'];
 
 const ROW_HEIGHT = 92;
+
+function FilterCount({ n }: { n: number | undefined }) {
+  if (n === undefined) return null;
+  return (
+    <span className="font-mono text-xs tabular-nums text-slate-500 dark:text-slate-400">
+      {n.toLocaleString('en-IN')}
+    </span>
+  );
+}
 
 function categoryAvatarClass(cat: Category): string {
   switch (cat) {
@@ -87,27 +105,20 @@ const ThreadListRow = memo(function ThreadListRow({
   nowMs,
   onSelect,
 }: RowProps) {
-  const latest = useThreadPreview(thread);
-  const tr = useTranslation(latest?.sms.body ?? null);
+  const tr = useTranslation(thread.preview || null);
   const needs = tr?.needsTranslation ?? false;
-  const snippet = latest
-    ? autoTranslate && needs && tr
-      ? tr.translatedText
-      : latest.sms.body
-    : '';
-  const highlightMeta = !latest
-    ? null
-    : latest.otp
-      ? 'Encrypted OTP'
-      : latest.transaction
-        ? `${latest.transaction.paymentMethod} ${
-            latest.transaction.direction === 'Debit' ? '-' : '+'
-          }${formatInr(latest.transaction.amount)}`
-        : latest.reminder
-          ? latest.reminder.reference || latest.reminder.dateText || latest.reminder.kind
-          : needs && tr
-            ? `${tr.language.label} → EN`
-            : null;
+  const snippet = autoTranslate && needs && tr ? tr.translatedText : thread.preview;
+  const txn = thread.latestTransaction;
+  const rem = thread.latestReminder;
+  const highlightMeta = thread.latestHasOtp
+    ? 'Encrypted OTP'
+    : txn
+      ? `${txn.paymentMethod} ${txn.direction === 'Debit' ? '-' : '+'}${formatInr(txn.amount)}`
+      : rem
+        ? rem.reference || rem.dateText || rem.kind
+        : needs && tr
+          ? `${tr.language.label} → EN`
+          : null;
 
   return (
     <button
@@ -150,7 +161,7 @@ const ThreadListRow = memo(function ThreadListRow({
               : 'text-slate-500 dark:text-slate-400'
           }`}
         >
-          {latest?.sms.isOutgoing ? `You: ${snippet}` : snippet}
+          {thread.previewIsOutgoing ? `You: ${snippet}` : snippet}
         </p>
 
         <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">
@@ -257,6 +268,8 @@ export function InboxView({
   onSelectThread,
   onThreadPatched,
   onChanged,
+  counts,
+  caps,
   onCopyOtp,
   completedReminderIds,
   onToggleReminderDone,
@@ -309,6 +322,7 @@ export function InboxView({
                     }`}
                   >
                     <span className="truncate">{filter}</span>
+                    <FilterCount n={counts?.filters[filter]} />
                   </button>
                 );
               })}
@@ -337,6 +351,7 @@ export function InboxView({
                     <span className="truncate">
                       {filter === 'RCS' ? 'RCS Chats' : filter}
                     </span>
+                    <FilterCount n={counts?.filters[filter]} />
                   </button>
                 );
               })}
@@ -373,6 +388,36 @@ export function InboxView({
               Uses the SIM slot recorded on each message.
             </p>
           </div>
+
+          {/* 10,000+ SMS History Capacity Meter */}
+          {counts && (
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+              <div className="px-1 flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-600 dark:text-slate-400">
+                  History Storage
+                </span>
+                <span className="font-mono tabular-nums text-slate-900 dark:text-slate-100 font-medium">
+                  {counts.totalMessages.toLocaleString('en-IN')} /{' '}
+                  {counts.capacity.toLocaleString('en-IN')}+
+                </span>
+              </div>
+              <div
+                role="meter"
+                aria-label="Stored SMS history"
+                aria-valuemin={0}
+                aria-valuemax={counts.capacity}
+                aria-valuenow={Math.min(counts.totalMessages, counts.capacity)}
+                className="h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden"
+              >
+                <div
+                  className="h-full bg-blue-700 dark:bg-blue-500 rounded-full"
+                  style={{
+                    width: `${Math.min(100, Math.max(4, (counts.totalMessages / counts.capacity) * 100))}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
 
           {import.meta.env.DEV && onLoadSample && (
             <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
@@ -691,6 +736,7 @@ export function InboxView({
             onBack={() => onSelectThread(null)}
             onChanged={onChanged}
             onThreadPatched={onThreadPatched}
+            caps={caps}
           />
         )}
       </section>

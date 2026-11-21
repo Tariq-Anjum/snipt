@@ -1,5 +1,6 @@
 import { call } from './core';
 import type {
+  AppSettings,
   BudgetLimits,
   BudgetPlannerSummary,
   CleanupBucketId,
@@ -13,6 +14,8 @@ export const financeSummary = (onlyActiveCycle: boolean): Promise<FinanceSummary
 
 export const budgetStats = (onlyActiveCycle: boolean): Promise<BudgetPlannerSummary> =>
   call('budget_stats', { onlyActiveCycle });
+
+export const getSettings = (): Promise<AppSettings> => call('get_settings');
 
 export const setCycle = (config: PaymentCycleConfig): Promise<PaymentCycleConfig> =>
   call('set_cycle', { config });

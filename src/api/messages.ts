@@ -1,5 +1,13 @@
 import { call } from './core';
-import type { MessageCursor, MessagesPage, ParsedSms, ThreadRow, TranslationResult } from './types';
+import type {
+  IncomingResult,
+  IncomingSms,
+  MessageCursor,
+  MessagesPage,
+  OutgoingResult,
+  OutgoingSms,
+  TranslationResult,
+} from './types';
 
 export function messagesPage(
   threadId: number,
@@ -21,6 +29,22 @@ export function deleteMessages(ids: number[]): Promise<number> {
   return call('delete_messages', { ids });
 }
 
+/**
+ * Store an outgoing SMS as `queued`; the Android telephony plugin sends it and
+ * reports `set_send_status`. Rejected where `capabilities().canSend` is false.
+ */
+export function queueOutgoing(message: OutgoingSms): Promise<OutgoingResult> {
+  return call('queue_outgoing', { message });
+}
+
+/** Platform receive path (Android receiver, or the dev simulator). */
+export function ingestIncoming(
+  message: IncomingSms,
+  providerId: number | null = null
+): Promise<IncomingResult> {
+  return call('ingest_incoming', { message, providerId });
+}
+
 // ---- translation (cached: the same text is shown many times while scrolling)
 const translations = new Map<string, Promise<TranslationResult>>();
 
@@ -33,45 +57,4 @@ export function translateText(text: string): Promise<TranslationResult> {
     translations.set(text, p);
   }
   return p;
-}
-
-// ---- latest message per thread (ThreadRow carries no preview; see report)
-const previews = new Map<string, Promise<ParsedSms | null>>();
-
-export function threadPreview(row: ThreadRow): Promise<ParsedSms | null> {
-  const key = `${row.threadId}:${row.latestMessageId}`;
-  let p = previews.get(key);
-  if (!p) {
-    p = messagesPage(row.threadId, null, 1).then((r) => r.messages[0] ?? null);
-    p.catch(() => previews.delete(key));
-    if (previews.size > 1000) previews.clear();
-    previews.set(key, p);
-  }
-  return p;
-}
-
-/**
- * Minimal ThreadRow for a thread id (no `get_thread` command yet). Archive and
- * star state are unknown from a single message and default to false.
- */
-export async function threadFromMessages(threadId: number): Promise<ThreadRow | null> {
-  const { messages } = await messagesPage(threadId, null, 1);
-  const m = messages[0];
-  if (!m) return null;
-  return {
-    threadId,
-    sender: m.sms.sender,
-    displayName: m.sms.contactName || (m.senderKind.type === 'DltHeader' ? m.senderKind.entity : m.sms.sender),
-    senderKind: m.senderKind,
-    latestTs: m.sms.timestampMs,
-    latestMessageId: m.sms.id,
-    classification: m.classification,
-    unreadCount: 0,
-    hasStarred: Boolean(m.sms.isStarred),
-    isArchived: false,
-    isBlocked: false,
-    simSlot: m.sms.simSlot,
-    isRcsCapable: m.sms.protocol === 'RCS',
-    messageCount: 0,
-  };
 }

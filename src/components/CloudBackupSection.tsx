@@ -25,6 +25,8 @@ interface CloudBackupSectionProps {
   lastBackupAtMs: number | null;
   onBackupSuccess: (timestampMs: number) => void;
   onRestored: (report: RestoreReport) => void;
+  /** Linux viewer: restore only (backups are made on the phone). */
+  readOnly: boolean;
 }
 
 export function CloudBackupSection({
@@ -33,6 +35,7 @@ export function CloudBackupSection({
   lastBackupAtMs,
   onBackupSuccess,
   onRestored,
+  readOnly,
 }: CloudBackupSectionProps) {
   const [passphrase, setPassphrase] = useState('');
   const [showPassphrase, setShowPassphrase] = useState(false);
@@ -228,6 +231,7 @@ export function CloudBackupSection({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            {!readOnly && (
             <button
               type="button"
               onClick={handleCreateBackup}
@@ -239,6 +243,7 @@ export function CloudBackupSection({
                 {busy ? 'Encrypting...' : 'Create Encrypted Backup (.mysms.enc)'}
               </span>
             </button>
+            )}
 
             <button
               type="button"
@@ -260,6 +265,12 @@ export function CloudBackupSection({
             />
           </div>
         </div>
+
+        {readOnly && (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            This device is a read-only viewer: restore the encrypted backup you made with Snipt on your phone.
+          </p>
+        )}
 
         {errorMessage && (
           <p

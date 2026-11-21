@@ -2,12 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   messagesPage,
   searchThreads,
-  threadPreview,
   threadsPage,
   translateText,
   type InboxFilter,
   type MessageCursor,
-  type ParsedSms,
+  type MessageView,
   type SimFilter,
   type ThreadCursor,
   type ThreadRow,
@@ -80,7 +79,7 @@ export function useThreadList(
 
 /** Messages of one thread, ascending (oldest first) for chat display. */
 export function useThreadMessages(threadId: number | null, version: number) {
-  const [messages, setMessages] = useState<ParsedSms[]>([]);
+  const [messages, setMessages] = useState<MessageView[]>([]);
   const [next, setNext] = useState<MessageCursor | null>(null);
   const [loading, setLoading] = useState(false);
   const [openedAt, setOpenedAt] = useState(0);
@@ -141,7 +140,7 @@ export function useThreadMessages(threadId: number | null, version: number) {
       });
   }, [threadId, next]);
 
-  const patch = useCallback((smsId: number, fn: (m: ParsedSms) => ParsedSms | null) => {
+  const patch = useCallback((smsId: number, fn: (m: MessageView) => MessageView | null) => {
     setMessages((prev) =>
       prev.flatMap((m) => {
         if (m.sms.id !== smsId) return [m];
@@ -151,21 +150,27 @@ export function useThreadMessages(threadId: number | null, version: number) {
     );
   }, []);
 
-  return { messages, hasOlder: next !== null, loading, loadOlder, patch, openedAt, prepended };
-}
+  /** Show a message the core just stored (e.g. a queued reply) at the bottom. */
+  const append = useCallback((m: MessageView) => {
+    setMessages((prev) => {
+      if (prev.some((x) => x.sms.id === m.sms.id)) return prev;
+      const merged = [...prev, m];
+      lenRef.current = merged.length;
+      return merged;
+    });
+    setOpenedAt((n) => n + 1);
+  }, []);
 
-export function useThreadPreview(row: ThreadRow): ParsedSms | null {
-  const [p, setP] = useState<ParsedSms | null>(null);
-  useEffect(() => {
-    let live = true;
-    threadPreview(row)
-      .then((m) => live && setP(m))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [row.threadId, row.latestMessageId]);
-  return p;
+  return {
+    messages,
+    hasOlder: next !== null,
+    loading,
+    loadOlder,
+    patch,
+    append,
+    openedAt,
+    prepended,
+  };
 }
 
 export function useTranslation(text: string | null): TranslationResult | null {

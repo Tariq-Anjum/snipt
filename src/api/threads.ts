@@ -1,5 +1,6 @@
 import { call } from './core';
 import type {
+  InboxCounts,
   InboxFilter,
   SimFilter,
   ThreadCursor,
@@ -25,6 +26,15 @@ export function searchThreads(
   limit = 100
 ): Promise<ThreadRow[]> {
   return call('search', { filter, sim: simArg(sim), query, limit });
+}
+
+export function getThread(threadId: number): Promise<ThreadRow | null> {
+  return call('get_thread', { threadId });
+}
+
+/** Per-filter thread counts, unread badge, total messages, capacity (10,000). */
+export function inboxCounts(sim: SimFilter = 'all'): Promise<InboxCounts> {
+  return call('inbox_counts', { sim: simArg(sim) });
 }
 
 export function archiveThread(threadId: number, archived: boolean): Promise<void> {
