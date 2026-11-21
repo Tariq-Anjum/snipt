@@ -8,7 +8,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sms_types::{BudgetLimits, PaymentCycleConfig, RawSms};
+use sms_types::{BudgetLimits, PaymentCycleConfig, RawSms, time::is_valid_timestamp_ms};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::{gcm_open, gcm_seal, jstrim::js_trim, random_bytes};
@@ -200,7 +200,18 @@ pub fn restore_encrypted_backup(
     {
         return Err(BackupError::NotAnArchive);
     }
-    serde_json::from_value(decoded).map_err(|_| BackupError::NotAnArchive)
+    let payload: MySmsBackupPayload =
+        serde_json::from_value(decoded).map_err(|_| BackupError::NotAnArchive)?;
+    // Restore boundary: reject timestamps a JS Date cannot represent.
+    if !is_valid_timestamp_ms(payload.created_at_ms)
+        || !payload
+            .messages
+            .iter()
+            .all(|m| is_valid_timestamp_ms(m.timestamp_ms))
+    {
+        return Err(BackupError::NotAnArchive);
+    }
+    Ok(payload)
 }
 
 /// `mysms-backup-YYYY-MM-DD.mysms.enc` in local time (backup.ts).

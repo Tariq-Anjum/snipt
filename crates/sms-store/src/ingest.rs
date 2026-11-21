@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use sms_engine::{Analysis, budget::categorize_merchant_expense};
-use sms_types::{MessageProtocol, RawSms, js};
+use sms_types::{MessageProtocol, RawSms, js, time::is_valid_timestamp_ms};
 
 use crate::{Result, Store, StoreError, threads::recompute_thread};
 
@@ -67,6 +67,9 @@ fn opt_json<T: Serialize>(v: &Option<T>) -> Result<Option<String>> {
 pub(crate) fn insert_message(tx: &Transaction<'_>, sms: &RawSms, a: &Analysis) -> Result<bool> {
     if sms.sim_slot > 1 {
         return Err(StoreError::Invalid("simSlot must be 0 or 1"));
+    }
+    if !is_valid_timestamp_ms(sms.timestamp_ms) {
+        return Err(StoreError::Invalid("timestampMs out of range"));
     }
     let exists: Option<i64> = tx
         .prepare_cached("SELECT 1 FROM messages WHERE id = ?1")?
@@ -165,6 +168,9 @@ impl Store {
     pub fn ingest_incoming(&mut self, input: &IncomingSms, now_ms: i64) -> Result<RawSms> {
         if input.sim_slot > 1 {
             return Err(StoreError::Invalid("simSlot must be 0 or 1"));
+        }
+        if !is_valid_timestamp_ms(input.timestamp_ms.unwrap_or(now_ms)) {
+            return Err(StoreError::Invalid("timestampMs out of range"));
         }
         let tx = self.conn.transaction()?;
         let normalized = js::trim(&input.sender).to_string();

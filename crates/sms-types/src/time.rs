@@ -3,6 +3,22 @@
 
 pub const DAY_MS: i64 = 86_400_000;
 
+/// Largest |timestamp| a JS `Date` can represent (±100 000 000 days). Message
+/// timestamps outside this range are rejected at the ingest and backup-restore
+/// boundaries; engine arithmetic is additionally overflow-safe for any `i64`.
+pub const MAX_TIMESTAMP_MS: i64 = 8_640_000_000_000_000;
+
+/// True when `ms` is a JS-representable instant (see [`MAX_TIMESTAMP_MS`]).
+pub fn is_valid_timestamp_ms(ms: i64) -> bool {
+    ms.unsigned_abs() <= MAX_TIMESTAMP_MS as u64
+}
+
+/// OTP expiry `ts + ttl_seconds * 1000`, saturating instead of wrapping, so a
+/// far-future message can never wrap into the past.
+pub fn expiry_ms(ts: i64, ttl_seconds: i64) -> i64 {
+    ts.saturating_add(ttl_seconds.saturating_mul(1000))
+}
+
 /// Days since 1970-01-01 for a proleptic Gregorian date (H. Hinnant).
 pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
@@ -30,5 +46,8 @@ pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
 
 /// Local calendar date (year, month 1-12, day) of a UTC instant.
 pub fn local_date(ms: i64, tz_offset_min: i32) -> (i64, i64, i64) {
-    civil_from_days((ms + i64::from(tz_offset_min) * 60_000).div_euclid(DAY_MS))
+    civil_from_days(
+        ms.saturating_add(i64::from(tz_offset_min) * 60_000)
+            .div_euclid(DAY_MS),
+    )
 }

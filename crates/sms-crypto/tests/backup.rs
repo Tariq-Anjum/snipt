@@ -174,3 +174,31 @@ fn pbkdf2_600k_timing() {
     assert_eq!(env.iterations, 600_000);
     println!("PBKDF2-SHA256 600k: create {enc:?}, restore {dec:?}");
 }
+
+/// R1 blocker: the restore boundary rejects timestamps a JS Date cannot hold.
+#[test]
+fn restore_rejects_out_of_range_timestamps() {
+    let now = 1_795_242_600_000;
+    for ts in [i64::MIN, i64::MAX, sms_types::time::MAX_TIMESTAMP_MS + 1] {
+        let mut p = payload(now);
+        p.messages[3].timestamp_ms = ts;
+        let (_, json) = create_encrypted_backup(&p, PASS, 10_000).unwrap();
+        assert_eq!(
+            restore_encrypted_backup(&json, PASS),
+            Err(BackupError::NotAnArchive),
+            "message ts={ts}"
+        );
+        let mut p = payload(now);
+        p.created_at_ms = ts;
+        let (_, json) = create_encrypted_backup(&p, PASS, 10_000).unwrap();
+        assert_eq!(
+            restore_encrypted_backup(&json, PASS),
+            Err(BackupError::NotAnArchive),
+            "createdAtMs={ts}"
+        );
+    }
+    let mut p = payload(now);
+    p.messages[3].timestamp_ms = -sms_types::time::MAX_TIMESTAMP_MS;
+    let (_, json) = create_encrypted_backup(&p, PASS, 10_000).unwrap();
+    assert_eq!(restore_encrypted_backup(&json, PASS).unwrap(), p);
+}

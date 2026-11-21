@@ -381,3 +381,57 @@ fn rejects_invalid_sim_slot() {
     assert!(s.ingest_batch(&seed[..1]).is_err());
     assert_eq!(s.message_count().unwrap(), 0);
 }
+
+/// R1 blocker: timestamps are validated at the ingest boundary.
+#[test]
+fn rejects_out_of_range_timestamps() {
+    let (now, mut seed) = seed();
+    let mut s = Store::open_in_memory(TZ).unwrap();
+    for ts in [i64::MIN, i64::MAX, time::MAX_TIMESTAMP_MS + 1] {
+        seed[0].timestamp_ms = ts;
+        assert!(s.ingest_batch(&seed[..1]).is_err(), "ts={ts}");
+        let incoming = IncomingSms {
+            sender: "VM-TEST-S".into(),
+            contact_name: None,
+            body: "hello".into(),
+            is_known_contact: false,
+            sim_slot: 0,
+            protocol: None,
+            timestamp_ms: Some(ts),
+        };
+        assert!(s.ingest_incoming(&incoming, now).is_err(), "ts={ts}");
+    }
+    assert_eq!(s.message_count().unwrap(), 0);
+    seed[0].timestamp_ms = time::MAX_TIMESTAMP_MS;
+    assert_eq!(s.ingest_batch(&seed[..1]).unwrap().inserted, 1);
+}
+
+/// R1 blocker: rows that bypassed validation (legacy DB) must not wrap the
+/// OTP expiry into the past.
+#[test]
+fn otp_expiry_saturates_for_extreme_stored_timestamps() {
+    let (now, seed) = seed();
+    let mut s = Store::open_in_memory(TZ).unwrap();
+    s.ingest_batch(&seed).unwrap();
+    let otp_ids: Vec<i64> = s.otp_items(now).unwrap().iter().map(|o| o.sms_id).collect();
+    assert!(!otp_ids.is_empty());
+    let id = otp_ids[0];
+    s.connection()
+        .execute(
+            "UPDATE messages SET ts_ms = ?2 WHERE id = ?1",
+            [id, i64::MAX],
+        )
+        .unwrap();
+    let item = s
+        .otp_items(now)
+        .unwrap()
+        .into_iter()
+        .find(|o| o.sms_id == id)
+        .unwrap();
+    assert_eq!(item.expires_at_ms, i64::MAX);
+    assert!(!item.is_expired);
+    let purged = s.purge_expired_otps(now).unwrap();
+    assert!(!purged.contains(&id));
+    let scan = s.weekly_scan(now).unwrap();
+    assert!(!scan.buckets.iter().any(|b| b.message_ids.contains(&id)));
+}

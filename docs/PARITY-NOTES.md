@@ -25,6 +25,15 @@ deterministic). Rust is kept equal to TS; deviations are listed here.
 - `toLowerCase()` Unicode tables of V8's ICU vs Rust's `char::to_lowercase` may differ for
   characters added in newer Unicode versions.
 
+## Intentional safety deviations (R1 review)
+- Weekly scan: transaction and active-reminder exclusions run before spam bucketing (fixed in
+  both the TS oracle and Rust; `scan.json` `blockedSafety`). Active reminder = BillDue / TravelPnr
+  at any age, Delivery younger than 7 days.
+- Timestamps: Rust rejects `|timestampMs| > 8.64e15` (JS `Date` range) at `Store::ingest_*` and
+  `restore_encrypted_backup` (`NotAnArchive`); TS accepts any number there. Engine/store expiry and
+  age arithmetic saturates (`sms_types::time::expiry_ms`, `saturating_sub`), so far-future rows
+  never wrap into "expired" and far-past rows count as old.
+
 ## sms-store vs store.ts (in-memory arrays → SQLite)
 - Thread list ties on `latest_ts` are ordered by `thread_id DESC` (keyset paging needs a total
   order); TS keeps first-appearance order. No ties in fixtures.

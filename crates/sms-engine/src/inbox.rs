@@ -350,7 +350,7 @@ pub fn collect_otp_items(threads: &[ThreadSummary], now_ms: i64) -> Vec<ActiveOt
         .flat_map(|t| {
             t.messages.iter().filter_map(move |m| {
                 let otp = m.otp.as_ref()?;
-                let expires_at_ms = m.sms.timestamp_ms + otp.ttl_seconds * 1000;
+                let expires_at_ms = sms_types::time::expiry_ms(m.sms.timestamp_ms, otp.ttl_seconds);
                 Some(ActiveOtpItem {
                     sms_id: m.sms.id,
                     thread_id: t.thread_id,
@@ -415,7 +415,7 @@ pub fn is_purgeable_expired_otp(raw: &RawSms, engine: &SmsEngine, now_ms: i64) -
     let p = engine.analyze(raw);
     match &p.otp {
         Some(otp) if p.transaction.is_none() && p.reminder.is_none() && !raw.starred() => {
-            now_ms >= raw.timestamp_ms + otp.ttl_seconds * 1000
+            now_ms >= sms_types::time::expiry_ms(raw.timestamp_ms, otp.ttl_seconds)
         }
         _ => false,
     }

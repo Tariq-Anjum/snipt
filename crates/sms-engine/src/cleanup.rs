@@ -113,7 +113,7 @@ where
         if sms.starred() || sms.is_outgoing || sms.is_known_contact {
             continue;
         }
-        let age_ms = now_ms - sms.timestamp_ms;
+        let age_ms = now_ms.saturating_sub(sms.timestamp_ms);
         let is_blocked = blocked.contains(&sms.sender.to_lowercase());
         let parsed = engine.analyze(sms);
 
@@ -134,7 +134,7 @@ where
         }
         if let Some(otp) = &parsed.otp
             && parsed.reminder.is_none()
-            && age_ms >= otp.ttl_seconds * 1000
+            && age_ms >= otp.ttl_seconds.saturating_mul(1000)
         {
             add_to_bucket(&mut expired, sms);
             continue;

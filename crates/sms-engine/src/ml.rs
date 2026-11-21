@@ -13,7 +13,6 @@ use sms_types::{CATEGORY_COUNT, Category, RawSms, SenderKind, js};
 
 pub const DEFAULT_DIM: usize = 8192;
 const STRUCT_SLOTS: usize = 16;
-const MAX_JS_TIME_MS: i64 = 8_640_000_000_000_000;
 
 pub fn fnv1a32(input: &str) -> u32 {
     let mut hash: u32 = 0x811c_9dc5;
@@ -84,7 +83,7 @@ pub fn extract_features(sms: &RawSms, sender_kind: &SenderKind, dim: usize) -> V
     }
     let alphas = alphas.max(1);
 
-    let hour_frac = if sms.timestamp_ms.abs() <= MAX_JS_TIME_MS {
+    let hour_frac = if sms_types::time::is_valid_timestamp_ms(sms.timestamp_ms) {
         let hour = sms.timestamp_ms.rem_euclid(86_400_000) / 3_600_000;
         hour as f64 / 24.0
     } else {

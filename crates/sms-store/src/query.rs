@@ -146,7 +146,7 @@ impl Store {
             .query_map([], |r| {
                 let otp: ExtractedOtp = de_json(Some(r.get(6)?))?.expect("otp");
                 let ts: i64 = r.get(4)?;
-                let expires_at_ms = ts + otp.ttl_seconds * 1000;
+                let expires_at_ms = sms_types::time::expiry_ms(ts, otp.ttl_seconds);
                 Ok(ActiveOtpItem {
                     sms_id: r.get(0)?,
                     thread_id: r.get(1)?,
@@ -219,7 +219,7 @@ impl Store {
         let mut touched = std::collections::BTreeSet::new();
         for (id, thread, ts, otp_json) in candidates {
             let otp: ExtractedOtp = serde_json::from_str(&otp_json)?;
-            if now_ms >= ts + otp.ttl_seconds * 1000 {
+            if now_ms >= sms_types::time::expiry_ms(ts, otp.ttl_seconds) {
                 tx.execute("DELETE FROM messages WHERE id = ?1", [id])?;
                 purged.push(id);
                 touched.insert(thread);
