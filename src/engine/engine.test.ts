@@ -191,6 +191,38 @@ test('Weekly useless SMS scan categorizes old promos, expired OTPs, spam, and ol
   assert.equal(nextState.messages.length, state.messages.length - 3);
 });
 
+test('Weekly scan: transaction and active-reminder exclusions beat blocked senders and Spam', () => {
+  const now = new Date(2026, 10, 21, 12, 0, 0).getTime();
+  const DAY = 24 * 60 * 60 * 1000;
+  const mk = (id: number, body: string, ageMs: number): RawSms => ({
+    id, threadId: 900, sender: 'XX-SCAMMR', body, timestampMs: now - ageMs,
+    isKnownContact: false, isOutgoing: false, simSlot: 0,
+  });
+  const upi = mk(9001, 'Rs.2,500.00 debited from HDFC Bank A/C XX4821 via UPI to SWIGGY on 20-Nov-26. Ref 632418902311. Avl Bal Rs.9,840.25', 10 * DAY);
+  const bill = mk(9002, 'Your electricity bill of Rs.1,240 is due. Pay by 28 Nov to avoid a late fee.', 10 * DAY);
+  const pnr = mk(9003, 'PNR: 4521890341 Train: 12952 RAJDHANI EXP Confirmed B3/42 Dep 22-Nov 16:55.', 30 * DAY);
+  const freshDelivery = mk(9004, 'Out for delivery: your order will be delivered today by 5:00 PM.', 2 * DAY);
+  const oldDelivery = mk(9005, 'Out for delivery: your order will be delivered today by 7:00 PM.', 12 * DAY);
+  const engine = new SmsEngine();
+  assert.ok(engine.analyzeMessage(upi).transaction);
+  assert.equal(engine.analyzeMessage(bill).reminder?.kind, 'BillDue');
+  assert.equal(engine.analyzeMessage(pnr).reminder?.kind, 'TravelPnr');
+  assert.equal(engine.analyzeMessage(freshDelivery).reminder?.kind, 'Delivery');
+
+  const seed = createSeedMessages(now);
+  const messages = [...seed, upi, bill, pnr, freshDelivery, oldDelivery];
+  const everyone = [...new Set(messages.map((m) => m.sender))];
+  const report = runWeeklyUselessScan(messages, everyone, now, engine);
+  const flagged = new Set(report.buckets.flatMap((b) => b.messageIds));
+  for (const id of [9001, 9002, 9003, 9004, 1001]) assert.equal(flagged.has(id), false, `id ${id}`);
+  assert.equal(flagged.has(9005), true); // expired delivery from a blocked sender stays deletable
+  for (const m of messages.filter((x) => flagged.has(x.id))) {
+    const p = engine.analyzeMessage(m);
+    assert.equal(p.transaction, null);
+    assert.ok(!p.reminder || (p.reminder.kind === 'Delivery' && now - m.timestampMs >= 7 * DAY));
+  }
+});
+
 test('10,000+ SMS history generator produces at least 10,000 messages cleanly and fast', () => {
   const now = Date.now();
   const seed = createSeedMessages(now);

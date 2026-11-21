@@ -165,7 +165,7 @@ fn weekly_scan_safety() {
     for m in seed.iter().filter(|m| flagged.contains(&m.id)) {
         let a = engine.analyze(m);
         assert!(!m.starred() && !m.is_outgoing && !m.is_known_contact);
-        assert!(a.transaction.is_none() || a.classification.category == Category::Spam);
+        assert!(a.transaction.is_none());
         assert!(!matches!(
             a.reminder.as_ref().map(|r| r.kind),
             Some(ReminderKind::BillDue | ReminderKind::TravelPnr)
@@ -174,6 +174,72 @@ fn weekly_scan_safety() {
 
     let kept: Vec<&RawSms> = seed.iter().filter(|m| !promos.contains(&m.id)).collect();
     assert_eq!(seed.len() - kept.len(), 3);
+}
+
+/// R1 blocker: blocked sender / Spam must not override transaction and
+/// active-reminder protection (mirror of the TS regression test).
+#[test]
+fn weekly_scan_blocked_sender_cannot_flag_protected() {
+    let now = now_ms();
+    const DAY: i64 = 86_400_000;
+    let mk = |id: i64, body: &str, age: i64| RawSms {
+        id,
+        thread_id: 900,
+        sender: "XX-SCAMMR".into(),
+        contact_name: None,
+        body: body.into(),
+        timestamp_ms: now - age,
+        is_known_contact: false,
+        is_outgoing: false,
+        sim_slot: 0,
+        is_read: None,
+        is_starred: None,
+        protocol: None,
+        rcs_status: None,
+        rcs_rich_card: None,
+    };
+    let extra = [
+        mk(
+            9001,
+            "Rs.2,500.00 debited from HDFC Bank A/C XX4821 via UPI to SWIGGY on 20-Nov-26. Ref 632418902311. Avl Bal Rs.9,840.25",
+            10 * DAY,
+        ),
+        mk(
+            9002,
+            "Your electricity bill of Rs.1,240 is due. Pay by 28 Nov to avoid a late fee.",
+            10 * DAY,
+        ),
+        mk(
+            9003,
+            "PNR: 4521890341 Train: 12952 RAJDHANI EXP Confirmed B3/42 Dep 22-Nov 16:55.",
+            30 * DAY,
+        ),
+        mk(
+            9004,
+            "Out for delivery: your order will be delivered today by 5:00 PM.",
+            2 * DAY,
+        ),
+        mk(
+            9005,
+            "Out for delivery: your order will be delivered today by 7:00 PM.",
+            12 * DAY,
+        ),
+    ];
+    let engine = SmsEngine::new();
+    assert!(engine.analyze(&extra[0]).transaction.is_some());
+    let mut all = create_seed_messages(now);
+    all.extend(extra);
+    let blocked: Vec<String> = all.iter().map(|m| m.sender.clone()).collect();
+    let r = run_weekly_useless_scan(&all, &blocked, now, &engine);
+    let flagged: Vec<i64> = r
+        .buckets
+        .iter()
+        .flat_map(|b| b.message_ids.clone())
+        .collect();
+    for id in [9001, 9002, 9003, 9004, 1001] {
+        assert!(!flagged.contains(&id), "id {id} flagged");
+    }
+    assert!(flagged.contains(&9005));
 }
 
 fn sha_ids(ids: &[i64]) -> String {
@@ -197,6 +263,13 @@ fn scan_fixture_equal() {
         serde_json::from_value(fx["seedBlocked"]["blockedSenders"].clone()).unwrap();
     let r = run_weekly_useless_scan(&seed, &blocked, now, &engine);
     assert_json_close(&r, &fx["seedBlocked"]["report"], "seedBlocked");
+
+    let safety = &fx["blockedSafety"];
+    let extra: Vec<RawSms> = serde_json::from_value(safety["extra"].clone()).unwrap();
+    let blocked: Vec<String> = serde_json::from_value(safety["blockedSenders"].clone()).unwrap();
+    let all: Vec<RawSms> = seed.iter().chain(&extra).cloned().collect();
+    let r = run_weekly_useless_scan(&all, &blocked, now, &engine);
+    assert_json_close(&r, &safety["report"], "blockedSafety");
 
     let archive = generate_bulk_history_messages(10_000, seed, now);
     let r = run_weekly_useless_scan(&archive, &[], now, &engine);

@@ -1,5 +1,6 @@
 //! Port of cleanup.ts — weekly useless-SMS scan. Never flags starred, outgoing,
-//! known-contact, transaction or bill/travel reminder messages.
+//! known-contact, transaction or active-reminder messages, even from blocked
+//! senders or when classified as Spam.
 
 use std::collections::HashSet;
 
@@ -116,11 +117,19 @@ where
         let is_blocked = blocked.contains(&sms.sender.to_lowercase());
         let parsed = engine.analyze(sms);
 
-        if is_blocked || parsed.classification.category == Category::Spam {
-            add_to_bucket(&mut spam, sms);
+        // Safety exclusions beat every bucket, including blocked senders and
+        // Spam: transactions and active reminders (bill due / travel PNR at any
+        // age, deliveries younger than 7 days) are never flagged.
+        if parsed.transaction.is_some() {
             continue;
         }
-        if parsed.transaction.is_some() {
+        if let Some(r) = &parsed.reminder
+            && (r.kind != ReminderKind::Delivery || age_ms < 7 * DAY_MS)
+        {
+            continue;
+        }
+        if is_blocked || parsed.classification.category == Category::Spam {
+            add_to_bucket(&mut spam, sms);
             continue;
         }
         if let Some(otp) = &parsed.otp

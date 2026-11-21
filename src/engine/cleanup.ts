@@ -101,13 +101,16 @@ export function runWeeklyUselessScan(
     const isBlocked = blockedSet.has(sms.sender.toLowerCase());
     const parsed = engine.analyzeMessage(sms);
 
+    // Safety exclusions come first and beat every bucket, including blocked senders
+    // and Spam: never auto-delete financial transactions or active reminders
+    // (bill due / travel PNR at any age, deliveries younger than 7 days).
+    if (parsed.transaction) continue;
+    if (parsed.reminder && (parsed.reminder.kind !== 'Delivery' || ageMs < 7 * DAY_MS)) continue;
+
     if (isBlocked || parsed.classification.category === 'Spam') {
       addToBucket(spamPhishing, sms);
       continue;
     }
-
-    // Never auto-delete financial transactions or travel/bill reminders
-    if (parsed.transaction) continue;
 
     if (parsed.otp && !parsed.reminder && ageMs >= parsed.otp.ttlSeconds * 1000) {
       addToBucket(expiredOtps, sms);

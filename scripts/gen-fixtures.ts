@@ -333,10 +333,26 @@ function scanSummary(r: WeeklyScanReport) {
     })),
   };
 }
+// Safety regression: transactions and active reminders from blocked senders are never flagged.
+const SCAN_DAY = 24 * 60 * 60 * 1000;
+const scanSafetyExtra: RawSms[] = [
+  ['Rs.2,500.00 debited from HDFC Bank A/C XX4821 via UPI to SWIGGY on 20-Nov-26. Ref 632418902311. Avl Bal Rs.9,840.25', 10],
+  ['Your electricity bill of Rs.1,240 is due. Pay by 28 Nov to avoid a late fee.', 10],
+  ['PNR: 4521890341 Train: 12952 RAJDHANI EXP Confirmed B3/42 Dep 22-Nov 16:55.', 30],
+  ['Out for delivery: your order will be delivered today by 5:00 PM.', 2],
+  ['Out for delivery: your order will be delivered today by 7:00 PM.', 12],
+  ['URGENT: your KYC is pending, account will be blocked. Click bit.ly/kyc-upd8 to verify.', 10],
+].map(([body, days], i) => canon({
+  id: 9001 + i, threadId: 900, sender: 'XX-SCAMMR', body: body as string,
+  timestampMs: NOW_MS - (days as number) * SCAN_DAY, isKnownContact: false, isOutgoing: false, simSlot: 0,
+}));
+const scanSafetyMessages = [...seed, ...scanSafetyExtra];
+const scanSafetyBlocked = [...new Set(scanSafetyMessages.map((m) => m.sender))];
 write(ENGINE_FX, 'scan.json', {
   nowMs: NOW_MS,
   seed: runWeeklyUselessScan(seed, [], NOW_MS),
   seedBlocked: { blockedSenders: ['JM-myntra-p', 'VM-AMAZON-S'], report: runWeeklyUselessScan(seed, ['JM-myntra-p', 'VM-AMAZON-S'], NOW_MS) },
+  blockedSafety: { extra: scanSafetyExtra, blockedSenders: scanSafetyBlocked, report: runWeeklyUselessScan(scanSafetyMessages, scanSafetyBlocked, NOW_MS) },
   bulk10k: scanSummary(runWeeklyUselessScan(archive, [], NOW_MS)),
 });
 
