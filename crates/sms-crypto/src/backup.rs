@@ -4,6 +4,16 @@
 //! messageCount, saltB64, ivB64, ciphertextB64}`; key = PBKDF2-HMAC-SHA256(JS-
 //! trimmed passphrase as UTF-8, salt, iterations, 32 B); ciphertext = AES-256-GCM
 //! ciphertext‖tag; base64 = standard alphabet with padding.
+//!
+//! Passphrase ownership: `create_encrypted_backup` / `restore_encrypted_backup`
+//! borrow the passphrase (`&str`) and never retain it. The CALLER owns that
+//! buffer and is responsible for wiping it (e.g. hold it in
+//! `Zeroizing<String>` and drop it right after the call). Inside this crate the
+//! JS-trimmed copy, the PBKDF2 state (see `kdf`), the derived AES key and the
+//! decrypted plaintext bytes are zeroized. Not wiped by this crate: the
+//! caller's buffer, the parsed `MySmsBackupPayload` (plain message data the
+//! caller receives), the AES-GCM key schedule inside `aes-gcm` beyond what its
+//! `zeroize` feature covers, and compiler-made move/spill copies.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use serde::{Deserialize, Serialize};
@@ -98,9 +108,7 @@ pub enum BackupError {
 }
 
 fn derive_key(passphrase: &str, salt: &[u8], iterations: u32) -> Zeroizing<[u8; 32]> {
-    let mut key = Zeroizing::new([0u8; 32]);
-    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(passphrase.as_bytes(), salt, iterations, &mut key[..]);
-    key
+    crate::kdf::pbkdf2_hmac_sha256_32(passphrase.as_bytes(), salt, iterations)
 }
 
 /// Encrypt a payload. Returns the envelope and its pretty JSON

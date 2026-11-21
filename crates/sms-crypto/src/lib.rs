@@ -5,6 +5,7 @@
 
 pub mod backup;
 pub mod jstrim;
+mod kdf;
 pub mod vault;
 
 pub use backup::{
