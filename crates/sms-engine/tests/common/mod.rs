@@ -71,3 +71,49 @@ pub fn classification_eq(got: &Classification, want: &Classification) -> Result<
     }
     Ok(())
 }
+
+/// Structural JSON equality; numbers compared with relative tolerance 1e-9
+/// (JS prints `3200`, serde prints `3200.0`; sums may differ in the last ulp).
+pub fn json_close(got: &Value, want: &Value, path: &str) -> Result<(), String> {
+    match (got, want) {
+        (Value::Number(a), Value::Number(b)) => {
+            let (a, b) = (a.as_f64().unwrap(), b.as_f64().unwrap());
+            if (a - b).abs() <= TOL * a.abs().max(b.abs()).max(1.0) {
+                Ok(())
+            } else {
+                Err(format!("{path}: {a} != {b}"))
+            }
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            if a.len() != b.len() {
+                return Err(format!("{path}: len {} != {}", a.len(), b.len()));
+            }
+            for (i, (x, y)) in a.iter().zip(b).enumerate() {
+                json_close(x, y, &format!("{path}[{i}]"))?;
+            }
+            Ok(())
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            let mut ka: Vec<&String> = a.keys().collect();
+            let mut kb: Vec<&String> = b.keys().collect();
+            ka.sort();
+            kb.sort();
+            if ka != kb {
+                return Err(format!("{path}: keys {ka:?} != {kb:?}"));
+            }
+            for k in ka {
+                json_close(&a[k], &b[k], &format!("{path}.{k}"))?;
+            }
+            Ok(())
+        }
+        (a, b) if a == b => Ok(()),
+        (a, b) => Err(format!("{path}: {a} != {b}")),
+    }
+}
+
+pub fn assert_json_close<T: serde::Serialize>(got: &T, want: &Value, ctx: &str) {
+    let g = serde_json::to_value(got).unwrap();
+    if let Err(e) = json_close(&g, want, ctx) {
+        panic!("{e}");
+    }
+}
