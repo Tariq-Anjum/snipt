@@ -1,24 +1,23 @@
 import { ArrowUpRight, Calendar, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import {
-  computeBudgetStats,
-  getCycleWindow,
-  PAYMENT_METHODS,
-  type BudgetCategoryId,
-  type BudgetLimits,
-  type FinanceSummary,
-  type PaymentCycleConfig,
-  type PaymentMethod,
-} from '../engine';
+import { getCycleWindow } from '../engine/budget';
+import { PAYMENT_METHODS } from '../engine/types';
+import type {
+  BudgetCategoryId,
+  BudgetPlannerSummary,
+  FinanceSummary,
+  PaymentCycleConfig,
+  PaymentMethod,
+} from '../api';
 import { formatFullDateTime, formatInr } from '../utils/format';
 
 interface FinanceViewProps {
   summary: FinanceSummary;
+  budgetStats: BudgetPlannerSummary;
   cycleConfig: PaymentCycleConfig;
   onChangeCycleDay: (method: PaymentMethod, day: number) => void;
   onlyActiveCycle: boolean;
   onToggleOnlyActiveCycle: (val: boolean) => void;
-  budgetLimits: BudgetLimits;
   onChangeBudgetLimit: (category: BudgetCategoryId, limit: number) => void;
   onOpenThread: (threadId: number) => void;
   nowMs: number;
@@ -34,22 +33,17 @@ type LedgerFilter =
 
 export function FinanceView({
   summary,
+  budgetStats,
   cycleConfig,
   onChangeCycleDay,
   onlyActiveCycle,
   onToggleOnlyActiveCycle,
-  budgetLimits,
   onChangeBudgetLimit,
   onOpenThread,
   nowMs,
 }: FinanceViewProps) {
   const [filter, setFilter] = useState<LedgerFilter>('all');
   const [query, setQuery] = useState('');
-
-  const budgetStats = useMemo(
-    () => computeBudgetStats(summary.transactions, budgetLimits, onlyActiveCycle),
-    [summary.transactions, budgetLimits, onlyActiveCycle]
-  );
 
   const filteredTxns = useMemo(() => {
     const q = query.trim().toLowerCase();

@@ -9,42 +9,36 @@ import {
   ShieldCheck,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import type {
-  BudgetLimits,
-  CleanupBucketId,
-  CloudBackupProvider,
-  MySmsBackupPayload,
-  PaymentCycleConfig,
-  RawSms,
-  WeeklyScanReport,
-} from '../engine';
-import type { ActiveOtpItem, ReminderItem } from '../engine/store';
+import { useEffect, useRef, useState } from 'react';
+import {
+  vaultReveal,
+  type CleanupBucketId,
+  type CloudBackupProvider,
+  type OtpItemView,
+  type ReminderItem,
+  type RestoreReport,
+  type WeeklyScanReport,
+} from '../api';
 import { formatCountdown, formatFullDateTime } from '../utils/format';
 import { CloudBackupSection } from './CloudBackupSection';
 
+export type ReminderRow = ReminderItem & { isDone: boolean };
+
 interface RemindersViewProps {
-  messages: RawSms[];
-  archivedThreadIds: number[];
-  blockedSenders: string[];
-  completedReminderSmsIds: number[];
-  cycleConfig: PaymentCycleConfig;
-  budgetLimits: BudgetLimits;
-  autoTranslateToEnglish: boolean;
   preferredCloudProvider: CloudBackupProvider;
   onChangeCloudProvider: (provider: CloudBackupProvider) => void;
   lastBackupAtMs: number | null;
   onBackupSuccess: (timestampMs: number) => void;
-  onRestoreBackup: (payload: MySmsBackupPayload) => void;
-  otps: ActiveOtpItem[];
-  reminders: ReminderItem[];
-  weeklyScan: WeeklyScanReport;
+  onRestored: (report: RestoreReport) => void;
+  otps: OtpItemView[];
+  reminders: ReminderRow[];
+  remindersLoading: boolean;
+  weeklyScan: WeeklyScanReport | null;
   scanScheduleDay: string;
   onChangeScanScheduleDay: (day: string) => void;
-  onDeleteSelectedUseless: (ids: number[]) => number;
+  onApplyCleanup: (buckets: CleanupBucketId[]) => Promise<number>;
   onCopyOtp: (code: string) => void;
   clipboardClearSecondsLeft: number | null;
-  onPurgeExpiredOtps: () => number;
   onToggleReminderDone: (smsId: number) => void;
   onOpenThread: (threadId: number) => void;
   nowMs: number;
@@ -66,33 +60,35 @@ function formatBytes(bytes: number): string {
 }
 
 export function RemindersView({
-  messages,
-  archivedThreadIds,
-  blockedSenders,
-  completedReminderSmsIds,
-  cycleConfig,
-  budgetLimits,
-  autoTranslateToEnglish,
   preferredCloudProvider,
   onChangeCloudProvider,
   lastBackupAtMs,
   onBackupSuccess,
-  onRestoreBackup,
+  onRestored,
   otps,
   reminders,
-  weeklyScan,
+  remindersLoading,
+  weeklyScan: scan,
   scanScheduleDay,
   onChangeScanScheduleDay,
-  onDeleteSelectedUseless,
+  onApplyCleanup,
   onCopyOtp,
   clipboardClearSecondsLeft,
-  onPurgeExpiredOtps,
   onToggleReminderDone,
   onOpenThread,
   nowMs,
 }: RemindersViewProps) {
   const [copiedId, setCopiedId] = useState<number | null>(null);
-  const [revealedIds, setRevealedIds] = useState<Record<number, boolean>>({});
+  // Plaintext codes live here only while revealed (auto-hidden after 30 s).
+  const [revealed, setRevealed] = useState<Record<number, string>>({});
+  const hideTimers = useRef<Record<number, number>>({});
+  const weeklyScan: WeeklyScanReport = scan ?? {
+    scannedAtMs: 0,
+    totalScanned: 0,
+    totalUselessCount: 0,
+    totalEstimatedBytes: 0,
+    buckets: [],
+  };
   const [purgeNotice, setPurgeNotice] = useState<string | null>(null);
   const [cleanupNotice, setCleanupNotice] = useState<string | null>(null);
   const [remFilter, setRemFilter] = useState<ReminderFilter>('all');
@@ -103,11 +99,14 @@ export function RemindersView({
     old_deliveries: true,
   });
 
-  useEffect(() => {
-    // Keep cleanup notice visible until user interacts
-  }, [weeklyScan]);
+  useEffect(
+    () => () => {
+      Object.values(hideTimers.current).forEach((t) => window.clearTimeout(t));
+    },
+    []
+  );
 
-  const expiredCount = otps.filter((o) => o.isExpired).length;
+  const expiredCount = otps.filter((o) => o.item.isExpired).length;
   const activeCount = otps.length - expiredCount;
 
   const selectedDeleteIds = weeklyScan.buckets
@@ -124,14 +123,42 @@ export function RemindersView({
     return true;
   });
 
-  const handleCopy = (smsId: number, code: string) => {
-    onCopyOtp(code);
-    setCopiedId(smsId);
-    window.setTimeout(() => setCopiedId(null), 1800);
+  const hide = (smsId: number) => {
+    window.clearTimeout(hideTimers.current[smsId]);
+    setRevealed((prev) => {
+      const { [smsId]: _gone, ...rest } = prev;
+      return rest;
+    });
   };
 
-  const handlePurge = () => {
-    const removed = onPurgeExpiredOtps();
+  const toggleReveal = async (view: OtpItemView) => {
+    const id = view.item.smsId;
+    if (revealed[id] !== undefined) {
+      hide(id);
+      return;
+    }
+    try {
+      const code = await vaultReveal(view.vault);
+      setRevealed((prev) => ({ ...prev, [id]: code }));
+      hideTimers.current[id] = window.setTimeout(() => hide(id), 30_000);
+    } catch {
+      setPurgeNotice('Could not decrypt this vault item (the vault key is per session).');
+    }
+  };
+
+  const handleCopy = async (view: OtpItemView) => {
+    try {
+      const code = revealed[view.item.smsId] ?? (await vaultReveal(view.vault));
+      onCopyOtp(code);
+      setCopiedId(view.item.smsId);
+      window.setTimeout(() => setCopiedId(null), 1800);
+    } catch {
+      setPurgeNotice('Could not decrypt this vault item (the vault key is per session).');
+    }
+  };
+
+  const handlePurge = async () => {
+    const removed = await onApplyCleanup(['expired_otps']).catch(() => 0);
     setPurgeNotice(
       removed > 0
         ? `Purged ${removed} expired OTP message${removed === 1 ? '' : 's'} from encrypted vault.`
@@ -139,11 +166,13 @@ export function RemindersView({
     );
   };
 
-  const handleDeleteUseless = () => {
+  const handleDeleteUseless = async () => {
     if (selectedDeleteIds.length === 0) return;
-    const removed = onDeleteSelectedUseless(selectedDeleteIds);
+    const buckets = weeklyScan.buckets.filter((b) => selectedBuckets[b.id]).map((b) => b.id);
+    const bytes = selectedBytes;
+    const removed = await onApplyCleanup(buckets).catch(() => 0);
     setCleanupNotice(
-      `Cleaned ${removed.toLocaleString('en-IN')} useless SMS (${formatBytes(selectedBytes)} reclaimed). Personal chats, bank alerts, and starred SMS were untouched.`
+      `Cleaned ${removed.toLocaleString('en-IN')} useless SMS (${formatBytes(bytes)} reclaimed). Personal chats, bank alerts, and starred SMS were untouched.`
     );
   };
 
@@ -161,19 +190,11 @@ export function RemindersView({
 
         {/* Section 0: Encrypted Multi-Cloud & Device Backup */}
         <CloudBackupSection
-          messages={messages}
-          archivedThreadIds={archivedThreadIds}
-          blockedSenders={blockedSenders}
-          completedReminderSmsIds={completedReminderSmsIds}
-          cycleConfig={cycleConfig}
-          budgetLimits={budgetLimits}
-          scanScheduleDay={scanScheduleDay}
-          autoTranslateToEnglish={autoTranslateToEnglish}
           preferredProvider={preferredCloudProvider}
           onChangeProvider={onChangeCloudProvider}
           lastBackupAtMs={lastBackupAtMs}
           onBackupSuccess={onBackupSuccess}
-          onRestorePayload={onRestoreBackup}
+          onRestored={onRestored}
         />
 
         {/* Section 1: Weekly Useless SMS Scan (Categorized Cleanup) */}
@@ -212,7 +233,7 @@ export function RemindersView({
 
               <button
                 type="button"
-                onClick={handleDeleteUseless}
+                onClick={() => void handleDeleteUseless()}
                 disabled={selectedDeleteIds.length === 0}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors whitespace-nowrap"
               >
@@ -322,7 +343,7 @@ export function RemindersView({
 
               <button
                 type="button"
-                onClick={handlePurge}
+                onClick={() => void handlePurge()}
                 disabled={expiredCount === 0}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-red-700 dark:text-red-300 bg-red-50 hover:bg-red-100 disabled:opacity-45 disabled:cursor-not-allowed dark:bg-red-950/50 dark:hover:bg-red-950 rounded-lg transition-colors whitespace-nowrap"
               >
@@ -347,8 +368,10 @@ export function RemindersView({
             </div>
           ) : (
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
-              {otps.slice(0, 15).map((item) => {
-                const revealed = Boolean(revealedIds[item.smsId]);
+              {otps.slice(0, 15).map((view) => {
+                const item = view.item;
+                const code = revealed[item.smsId];
+                const isRevealed = code !== undefined;
                 return (
                   <div
                     key={item.smsId}
@@ -377,31 +400,26 @@ export function RemindersView({
                         </span>
                       </div>
                       <p className="mt-1 text-xs text-slate-600 dark:text-slate-300 line-clamp-2">
-                        {item.body}
+                        {isRevealed ? item.body : 'Message hidden until you reveal the code.'}
                       </p>
                     </div>
 
                     <div className="flex items-center gap-2.5 shrink-0">
                       <span className="font-mono text-lg font-semibold tracking-wider tabular-nums text-slate-900 dark:text-slate-100">
-                        {revealed ? item.otp.code : '•'.repeat(item.otp.code.length)}
+                        {isRevealed ? code : item.otp.code}
                       </span>
 
                       <button
                         type="button"
-                        onClick={() =>
-                          setRevealedIds((prev) => ({
-                            ...prev,
-                            [item.smsId]: !prev[item.smsId],
-                          }))
-                        }
+                        onClick={() => void toggleReveal(view)}
                         aria-label={
-                          revealed
+                          isRevealed
                             ? `Hide OTP from ${item.sender}`
                             : `Reveal OTP from ${item.sender}`
                         }
                         className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 bg-slate-100 dark:bg-slate-800 rounded-lg"
                       >
-                        {revealed ? (
+                        {isRevealed ? (
                           <EyeOff className="w-4 h-4" aria-hidden="true" />
                         ) : (
                           <Eye className="w-4 h-4" aria-hidden="true" />
@@ -410,7 +428,7 @@ export function RemindersView({
 
                       <button
                         type="button"
-                        onClick={() => handleCopy(item.smsId, item.otp.code)}
+                        onClick={() => void handleCopy(view)}
                         aria-label={`Copy OTP from ${item.sender}`}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 dark:bg-blue-600 dark:hover:bg-blue-500 rounded-lg transition-colors whitespace-nowrap"
                       >
@@ -481,7 +499,7 @@ export function RemindersView({
 
           {filteredReminders.length === 0 ? (
             <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
-              No reminders in this view.
+              {remindersLoading ? 'Scanning recent threads for reminders...' : 'No reminders in this view.'}
             </div>
           ) : (
             <div className="divide-y divide-slate-100 dark:divide-slate-800">

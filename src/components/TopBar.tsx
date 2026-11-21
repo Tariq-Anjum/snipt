@@ -1,20 +1,14 @@
-import {
-  Bell,
-  Code2,
-  Inbox,
-  IndianRupee,
-  Plus,
-} from 'lucide-react';
-import { motion } from 'motion/react';
-import { MySmsGlassIcon } from './MySmsGlassIcon';
+import { Bell, Inbox, IndianRupee, Plus } from 'lucide-react';
+import { m } from 'motion/react';
+import { SniptGlassIcon } from './SniptGlassIcon';
 
-export type ActiveTab = 'inbox' | 'finance' | 'reminders' | 'rust';
+export type ActiveTab = 'inbox' | 'finance' | 'reminders';
 export type DesignStyle = 'glass' | 'solid';
 
 interface TopBarProps {
   activeTab: ActiveTab;
   onSelectTab: (tab: ActiveTab) => void;
-  onOpenSimulate: () => void;
+  onOpenSimulate?: () => void;
   unreadCount: number;
   pendingReminderCount: number;
   designStyle: DesignStyle;
@@ -28,7 +22,6 @@ const NAV_ITEMS: Array<{
   { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'finance', label: 'Finance', icon: IndianRupee },
   { id: 'reminders', label: 'Vault & Backup', icon: Bell },
-  { id: 'rust', label: 'Android Core', icon: Code2 },
 ];
 
 export function TopBar({
@@ -41,19 +34,21 @@ export function TopBar({
 }: TopBarProps) {
   return (
     <>
-      <header className="sticky top-0 z-30 h-13 md:h-14 bg-white dark:bg-slate-900 glass-chrome border-b border-slate-200 dark:border-slate-800 px-4 md:px-6 flex items-center justify-between gap-8 transition-colors">
+      <header className="sticky top-0 z-30 h-13 md:h-14 shrink-0 bg-white dark:bg-slate-900 glass-chrome border-b border-slate-200 dark:border-slate-800 px-4 md:px-6 flex items-center justify-between gap-8 transition-colors">
         {/* Zone 1: Single-line brand mark + Liquid Glass icon */}
         <button
           type="button"
           onClick={() => onSelectTab('inbox')}
+          aria-label="Snipt - Snip the noise"
+          title="Snip the noise"
           className="inline-flex items-center gap-2.5 font-display text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-600 rounded-lg"
         >
-          <MySmsGlassIcon
+          <SniptGlassIcon
             size={28}
             variant={designStyle}
             className="shrink-0 drop-shadow-xs"
           />
-          <span>mySMS</span>
+          <span>Snipt</span>
         </button>
 
         {/* Zone 2: 4 concise single-line text navigation links with adaptive-rate spring underline */}
@@ -89,9 +84,7 @@ export function TopBar({
                   </span>
                 )}
                 {isActive && (
-                  <motion.span
-                    layoutId="mysms-nav-indicator"
-                    transition={{ type: 'spring', stiffness: 520, damping: 38 }}
+                  <span
                     aria-hidden="true"
                     className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full bg-blue-700 dark:bg-blue-400"
                   />
@@ -103,7 +96,8 @@ export function TopBar({
 
         {/* Zone 3: Single primary CTA */}
         <div className="flex items-center shrink-0">
-          <motion.button
+          {import.meta.env.DEV && onOpenSimulate && (
+          <m.button
             type="button"
             whileTap={{ scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 560, damping: 36 }}
@@ -112,14 +106,15 @@ export function TopBar({
           >
             <Plus className="w-3.5 h-3.5" aria-hidden="true" />
             <span>Simulate SMS</span>
-          </motion.button>
+          </m.button>
+          )}
         </div>
       </header>
 
       {/* Mobile Bottom Tab Bar (Thumb Zone, total fixed mobile chrome <= 15% of 844px) */}
       <nav
         aria-label="Mobile navigation"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-white/95 dark:bg-slate-900/95 glass-chrome border-t border-slate-200 dark:border-slate-800 grid grid-cols-4 items-center px-1"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 min-h-16 safe-bottom bg-white/95 dark:bg-slate-900/95 glass-chrome border-t border-slate-200 dark:border-slate-800 grid grid-cols-3 items-center px-1"
       >
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;

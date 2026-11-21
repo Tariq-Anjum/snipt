@@ -94,9 +94,9 @@ export function SimulateSmsModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="simulate-sms-title"
-      className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs flex items-end md:items-center justify-center p-0 md:p-4"
+      className="fixed inset-0 z-50 bg-slate-950/50 flex items-end md:items-center justify-center p-0 md:p-4"
     >
-      <div className="w-full md:max-w-xl bg-white dark:bg-slate-900 glass-panel border border-slate-200 dark:border-slate-800 rounded-t-2xl md:rounded-2xl shadow-xl max-h-[92vh] overflow-y-auto">
+      <div className="w-full md:max-w-xl bg-white dark:bg-slate-900 glass-sheet border border-slate-200 dark:border-slate-800 rounded-t-2xl md:rounded-2xl shadow-xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h2

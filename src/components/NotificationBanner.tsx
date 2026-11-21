@@ -1,7 +1,7 @@
-import { Check, Copy, Lock, Reply, Send, Trash2, X } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
-import { useState, type FormEvent } from 'react';
-import type { ParsedSms } from '../engine';
+import { Check, Copy, Lock, Trash2, X } from 'lucide-react';
+import { AnimatePresence, m } from 'motion/react';
+import { useState } from 'react';
+import type { ParsedSms } from '../api';
 import { formatInr } from '../utils/format';
 
 interface NotificationBannerProps {
@@ -11,7 +11,6 @@ interface NotificationBannerProps {
   onCopyOtp: (code: string) => void;
   onMarkRead: (smsId: number) => void;
   onDeleteSms: (smsId: number) => void;
-  onQuickReply: (threadId: number, body: string, simSlot: 0 | 1, protocol: 'SMS' | 'RCS') => void;
 }
 
 export function NotificationBanner({
@@ -21,11 +20,8 @@ export function NotificationBanner({
   onCopyOtp,
   onMarkRead,
   onDeleteSms,
-  onQuickReply,
 }: NotificationBannerProps) {
   const [copied, setCopied] = useState(false);
-  const [replyOpen, setReplyOpen] = useState(false);
-  const [replyBody, setReplyBody] = useState('');
 
   const protocol = parsed?.sms.protocol ?? 'SMS';
 
@@ -36,19 +32,10 @@ export function NotificationBanner({
     window.setTimeout(() => setCopied(false), 1800);
   };
 
-  const handleQuickReplySubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!parsed || !replyBody.trim()) return;
-    onQuickReply(parsed.sms.threadId, replyBody.trim(), parsed.sms.simSlot, protocol);
-    setReplyBody('');
-    setReplyOpen(false);
-    onDismiss();
-  };
-
   return (
     <AnimatePresence>
       {parsed && (
-        <motion.div
+        <m.div
           key={parsed.sms.id}
           initial={{ opacity: 0, y: -14, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -56,7 +43,7 @@ export function NotificationBanner({
           transition={{ type: 'spring', stiffness: 460, damping: 34, mass: 0.8 }}
           role="status"
           aria-live="polite"
-          className="fixed top-16 right-4 left-4 md:left-auto md:w-[430px] z-50 bg-white dark:bg-slate-900 glass-panel border border-slate-200 dark:border-slate-700 rounded-2xl shadow-lg p-4"
+          className="fixed top-16 right-4 left-4 md:left-auto md:w-[430px] z-50 bg-white dark:bg-slate-900 glass-toast border border-slate-200 dark:border-slate-700 rounded-2xl shadow-lg p-4"
         >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -105,7 +92,7 @@ export function NotificationBanner({
         </div>
       )}
 
-      {/* Interactive Android-style Notification Actions: Copy OTP / Mark Read / Reply / Delete */}
+      {/* Interactive Android-style Notification Actions: Copy OTP / Mark Read / Delete */}
       <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1.5">
           {parsed.otp && (
@@ -142,16 +129,6 @@ export function NotificationBanner({
 
           <button
             type="button"
-            onClick={() => setReplyOpen((open) => !open)}
-            aria-expanded={replyOpen}
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-300 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/60 dark:hover:bg-blue-950 rounded-md transition-colors whitespace-nowrap"
-          >
-            <Reply className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Reply</span>
-          </button>
-
-          <button
-            type="button"
             onClick={() => {
               onDeleteSms(parsed.sms.id);
               onDismiss();
@@ -175,32 +152,7 @@ export function NotificationBanner({
         </button>
       </div>
 
-      {/* Inline Quick Reply Box */}
-      {replyOpen && (
-        <form
-          onSubmit={handleQuickReplySubmit}
-          className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2"
-        >
-          <input
-            type="text"
-            aria-label="Quick reply message"
-            value={replyBody}
-            onChange={(e) => setReplyBody(e.target.value)}
-            placeholder={`Quick reply via ${protocol === 'RCS' ? 'RCS' : `SIM ${parsed.sms.simSlot + 1}`}...`}
-            className="flex-1 min-w-0 px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
-          />
-          <button
-            type="submit"
-            disabled={!replyBody.trim()}
-            aria-label="Send quick reply"
-            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 disabled:opacity-40 rounded-md transition-colors shrink-0"
-          >
-            <Send className="w-3 h-3" aria-hidden="true" />
-            <span>Send</span>
-          </button>
-        </form>
-      )}
-        </motion.div>
+        </m.div>
       )}
     </AnimatePresence>
   );

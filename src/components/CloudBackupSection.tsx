@@ -10,48 +10,29 @@ import {
 } from 'lucide-react';
 import { useRef, useState, type ChangeEvent } from 'react';
 import {
-  buildBackupFilename,
+  backupCreate,
+  backupRestore,
   CLOUD_BACKUP_PROVIDERS,
-  createEncryptedBackup,
-  restoreEncryptedBackup,
-  type BudgetLimits,
+  downloadText,
   type CloudBackupProvider,
-  type MySmsBackupPayload,
-  type PaymentCycleConfig,
-  type RawSms,
-} from '../engine';
+  type RestoreReport,
+} from '../api';
 import { formatFullDateTime } from '../utils/format';
 
 interface CloudBackupSectionProps {
-  messages: RawSms[];
-  archivedThreadIds: number[];
-  blockedSenders: string[];
-  completedReminderSmsIds: number[];
-  cycleConfig: PaymentCycleConfig;
-  budgetLimits: BudgetLimits;
-  scanScheduleDay: string;
-  autoTranslateToEnglish: boolean;
   preferredProvider: CloudBackupProvider;
   onChangeProvider: (provider: CloudBackupProvider) => void;
   lastBackupAtMs: number | null;
   onBackupSuccess: (timestampMs: number) => void;
-  onRestorePayload: (payload: MySmsBackupPayload) => void;
+  onRestored: (report: RestoreReport) => void;
 }
 
 export function CloudBackupSection({
-  messages,
-  archivedThreadIds,
-  blockedSenders,
-  completedReminderSmsIds,
-  cycleConfig,
-  budgetLimits,
-  scanScheduleDay,
-  autoTranslateToEnglish,
   preferredProvider,
   onChangeProvider,
   lastBackupAtMs,
   onBackupSuccess,
-  onRestorePayload,
+  onRestored,
 }: CloudBackupSectionProps) {
   const [passphrase, setPassphrase] = useState('');
   const [showPassphrase, setShowPassphrase] = useState(false);
@@ -77,41 +58,11 @@ export function CloudBackupSection({
 
     setBusy(true);
     try {
-      const now = Date.now();
-      const { envelope, serialized } = await createEncryptedBackup(
-        {
-          schemaVersion: 1,
-          app: 'mySMS',
-          createdAtMs: now,
-          provider: preferredProvider,
-          messages,
-          archivedThreadIds,
-          blockedSenders,
-          completedReminderSmsIds,
-          cycleConfig,
-          budgetLimits,
-          scanScheduleDay,
-          autoTranslateToEnglish,
-        },
-        passphrase
-      );
-
-      const filename = buildBackupFilename(now);
-      const blob = new Blob([serialized], {
-        type: 'application/json;charset=utf-8',
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-
-      onBackupSuccess(now);
+      const file = await backupCreate(passphrase);
+      downloadText(file.filename, file.content);
+      onBackupSuccess(Date.now());
       setStatusMessage(
-        `Encrypted ${envelope.messageCount.toLocaleString('en-IN')} messages with AES-256-GCM into ${filename} (ready for ${selectedProviderMeta.label}).`
+        `Encrypted ${file.messageCount.toLocaleString('en-IN')} messages with AES-256-GCM into ${file.filename} (ready for ${selectedProviderMeta.label}).`
       );
     } catch (err) {
       setErrorMessage(
@@ -145,10 +96,10 @@ export function CloudBackupSection({
 
     try {
       const text = await file.text();
-      const restored = await restoreEncryptedBackup(text, passphrase);
-      onRestorePayload(restored);
+      const report = await backupRestore(text, passphrase);
+      onRestored(report);
       setStatusMessage(
-        `Restored ${restored.messages.length.toLocaleString('en-IN')} messages, billing cycles, and budget limits from ${file.name}.`
+        `Restored ${report.ingest.inserted.toLocaleString('en-IN')} messages (${report.ingest.skippedExisting.toLocaleString('en-IN')} already present), ${report.archivedThreads} archived threads and ${report.blockedSenders} blocked senders from ${file.name}.`
       );
     } catch (err) {
       setErrorMessage(
@@ -186,7 +137,7 @@ export function CloudBackupSection({
               <span>Last backup: {formatFullDateTime(lastBackupAtMs)}</span>
             </span>
           ) : (
-            <span>No backup saved yet · {messages.length.toLocaleString('en-IN')} SMS ready</span>
+            <span>No backup saved yet</span>
           )}
         </div>
       </div>
@@ -251,7 +202,7 @@ export function CloudBackupSection({
                   setPassphrase(e.target.value);
                   setErrorMessage(null);
                 }}
-                placeholder="At least 6 characters (e.g. mySMS-home-2026)"
+                placeholder="At least 6 characters (e.g. snipt-home-2026)"
                 className="w-full pl-9 pr-10 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
               />
               <button
@@ -304,7 +255,7 @@ export function CloudBackupSection({
               type="file"
               accept=".enc,.json,application/octet-stream,application/json"
               onChange={handleFileSelected}
-              aria-label="Choose encrypted mySMS backup file to restore"
+              aria-label="Choose encrypted Snipt backup file to restore"
               className="sr-only"
             />
           </div>

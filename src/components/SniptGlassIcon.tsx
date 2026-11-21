@@ -1,21 +1,21 @@
 import { useId } from 'react';
 
-interface MySmsGlassIconProps {
+interface SniptGlassIconProps {
   size?: number;
   variant?: 'glass' | 'solid';
   className?: string;
 }
 
 /**
- * Bespoke Liquid Glass app icon for mySMS.
+ * Bespoke Liquid Glass app icon for Snipt.
  * Uses multi-layer specular glass refraction, inner rim highlight,
  * frosted floating speech emblem, and subtle encrypted OTP shimmer.
  */
-export function MySmsGlassIcon({
+export function SniptGlassIcon({
   size = 28,
   variant = 'glass',
   className = '',
-}: MySmsGlassIconProps) {
+}: SniptGlassIconProps) {
   const uid = useId().replace(/:/g, '');
   const isGlass = variant === 'glass';
 
