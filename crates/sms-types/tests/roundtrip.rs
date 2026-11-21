@@ -35,3 +35,23 @@ fn sender_kind_tagging() {
     assert_byte_stable::<BudgetCategoryId>(r#""Food & Dining""#);
     assert_byte_stable::<ClassificationReason>(r#""otp_or_reminder""#);
 }
+
+/// Canonical seed JSON exported by scripts/gen-fixtures.ts (one message per line)
+/// must survive deserialise → serialise byte-for-byte.
+#[test]
+fn ts_seed_fixture_is_byte_stable() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../sms-engine/tests/fixtures/seed_raw.json"
+    );
+    let text = std::fs::read_to_string(path).expect("seed_raw.json (run gen-fixtures)");
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("{\"id\""))
+        .map(|l| l.trim_end_matches(','))
+        .collect();
+    assert_eq!(lines.len(), 27);
+    for l in lines {
+        assert_byte_stable::<RawSms>(l);
+    }
+}
