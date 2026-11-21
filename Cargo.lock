@@ -3281,6 +3281,7 @@ dependencies = [
  "sms-types",
  "tauri",
  "tauri-build",
+ "zeroize",
 ]
 
 [[package]]

@@ -3,9 +3,9 @@
 
 use sms_crypto::EncryptedOtpPayload;
 use sms_engine::cleanup::CleanupBucketId;
-use sms_store::Store;
+use sms_store::{IncomingSms, OutgoingSms, SendStatus, Store};
 use sms_types::{BudgetLimits, PaymentCycleConfig};
-use snipt_lib::core::{AppState, Core, MAX_QUERY_CHARS, platform_capabilities};
+use snipt_lib::core::{AppState, Capabilities, Core, MAX_QUERY_CHARS, platform_capabilities};
 
 fn now() -> i64 {
     snipt_lib::core::now_ms()
@@ -34,12 +34,173 @@ fn seeded() -> Core {
 }
 
 #[test]
-fn capabilities_is_linux_on_desktop() {
+fn capabilities_is_linux_read_only_on_desktop() {
     assert_eq!(platform_capabilities().platform, "linux");
     assert_eq!(
         serde_json::to_string(&platform_capabilities()).unwrap(),
-        r#"{"platform":"linux"}"#
+        r#"{"platform":"linux","canSend":false,"readOnly":true,"defaultSmsRole":false,"rcs":false,"mms":false,"simSlots":2}"#
     );
+}
+
+fn phone_caps() -> Capabilities {
+    Capabilities {
+        platform: "android",
+        can_send: true,
+        read_only: false,
+        ..platform_capabilities()
+    }
+}
+
+fn seeded_phone() -> Core {
+    let mut st = Store::open_in_memory(330).unwrap();
+    st.ingest_batch(&sms_testdata::create_seed_messages(now()))
+        .unwrap();
+    Core::with_capabilities(st, phone_caps())
+}
+
+#[test]
+fn get_thread_counts_settings_and_reminders() {
+    let mut c = seeded();
+    let row = c.threads_page("All", None, None, Some(1)).unwrap().threads[0].clone();
+    assert_eq!(c.get_thread(row.thread_id).unwrap(), Some(row.clone()));
+    assert_eq!(c.get_thread(-1).unwrap(), None);
+    assert!(row.preview.chars().count() <= 140);
+
+    let counts = c.inbox_counts(None).unwrap();
+    assert_eq!(counts.total_messages, 27);
+    assert_eq!(counts.capacity, 10_000);
+    assert!(counts.unread > 0 && counts.filters.all > 0);
+    assert!(c.inbox_counts(Some(2)).is_err());
+
+    let s = c.get_settings().unwrap();
+    assert_eq!(s.cycle_config, PaymentCycleConfig::default());
+    assert_eq!(s.budget_limits, BudgetLimits::default());
+    let json = serde_json::to_value(&s).unwrap();
+    assert_eq!(json["cycleConfig"]["Credit Card"], 15.0);
+
+    let rem = c.reminders().unwrap();
+    assert!(!rem.is_empty() && rem.iter().all(|r| !r.is_done));
+    c.set_reminder_done(rem[0].sms_id, true).unwrap();
+    let rem2 = c.reminders().unwrap();
+    assert!(rem2.iter().any(|r| r.sms_id == rem[0].sms_id && r.is_done));
+    assert!(!rem2[0].is_done, "pending reminders sort first");
+}
+
+#[test]
+fn ingest_incoming_returns_thread_and_redacted_notification() {
+    let mut c = seeded();
+    let msg = IncomingSms {
+        sender: "AX-HDFCBK".into(),
+        contact_name: None,
+        body: "Your OTP is 551203 for login. Do not share.".into(),
+        is_known_contact: false,
+        sim_slot: 1,
+        protocol: None,
+        timestamp_ms: None,
+    };
+    let r = c.ingest_incoming(&msg, Some(42)).unwrap();
+    assert!(r.inserted && r.notification.notify);
+    let n = &r.notification;
+    assert!(!n.message.sms.body.contains("551203"));
+    assert!(!serde_json::to_string(&r).unwrap().contains("551203"));
+    assert_eq!(n.message.otp.as_ref().unwrap().code, "\u{2022}".repeat(6));
+    assert_eq!(
+        c.vault_reveal(n.otp_vault.as_ref().unwrap()).unwrap(),
+        "551203"
+    );
+    assert!(n.otp_expires_at_ms.unwrap() > now());
+    assert_eq!(r.thread.latest_message_id, n.message.sms.id);
+    assert!(r.thread.latest_has_otp && !r.thread.preview.contains("551203"));
+    // retry with the same provider id: no new row, no notification
+    let again = c.ingest_incoming(&msg, Some(42)).unwrap();
+    assert!(!again.inserted && !again.notification.notify);
+    assert_eq!(c.store().message_count().unwrap(), 28);
+    // blocked sender: stored but silent
+    c.block("AX-HDFCBK", true).unwrap();
+    let quiet = c.ingest_incoming(&msg, None).unwrap();
+    assert!(quiet.inserted && !quiet.notification.notify);
+    assert!(
+        c.ingest_incoming(
+            &IncomingSms {
+                sender: " ".into(),
+                ..msg.clone()
+            },
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        c.ingest_incoming(
+            &IncomingSms {
+                body: "x".repeat(20_001),
+                ..msg
+            },
+            None
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn send_queue_rejected_on_linux_accepted_on_phone() {
+    let out = |t: i64| OutgoingSms {
+        thread_id: Some(t),
+        address: None,
+        body: "On my way".into(),
+        sim_slot: 0,
+    };
+    let mut linux = seeded();
+    let t = linux
+        .threads_page("All", None, None, Some(1))
+        .unwrap()
+        .threads[0]
+        .thread_id;
+    let err = linux.queue_outgoing(&out(t)).unwrap_err();
+    assert!(err.0.contains("not available"));
+    assert_eq!(linux.store().message_count().unwrap(), 27);
+
+    let mut phone = seeded_phone();
+    assert!(phone.capabilities().can_send);
+    let r = phone.queue_outgoing(&out(t)).unwrap();
+    assert_eq!(r.message.send_status, Some(SendStatus::Queued));
+    assert_eq!(r.thread.latest_message_id, r.message.sms.id);
+    let id = r.message.sms.id;
+    let page = phone.messages_page(t, None, Some(1)).unwrap();
+    assert_eq!(page.messages[0].sms.id, id);
+    assert_eq!(page.messages[0].send_status, Some(SendStatus::Queued));
+    let json = serde_json::to_value(&page.messages[0]).unwrap();
+    assert_eq!(json["sendStatus"], "queued");
+    assert!(json["sms"].is_object(), "flattened ParsedSms shape");
+    assert!(
+        phone
+            .set_send_status(id, SendStatus::Delivered, Some(5))
+            .unwrap()
+    );
+    assert_eq!(phone.provider_refs(&[id]).unwrap()[0].provider_id, 5);
+    assert_eq!(
+        phone.provider_mark_read(&[5]).unwrap(),
+        0,
+        "outgoing is already read"
+    );
+    assert_eq!(phone.provider_delete(&[5]).unwrap(), 1);
+    assert!(phone.provider_delete(&vec![1; 20_001]).is_err());
+}
+
+#[test]
+fn purge_expired_otps_follows_ts_ttl_rule() {
+    let mut c = seeded();
+    let before = c.store().message_count().unwrap();
+    let expired = c
+        .otp_items()
+        .unwrap()
+        .iter()
+        .filter(|o| o.item.is_expired)
+        .count();
+    let purged = c.purge_expired_otps().unwrap();
+    assert!(purged > 0 && purged <= expired);
+    assert_eq!(c.store().message_count().unwrap(), before - purged as i64);
+    assert!(c.otp_items().unwrap().iter().all(|o| !o.item.is_expired));
+    assert_eq!(c.purge_expired_otps().unwrap(), 0);
 }
 
 #[test]
@@ -141,6 +302,14 @@ fn otp_vault_reveal_roundtrip() {
     assert!(v.item.otp.code.chars().all(|ch| ch == '\u{2022}'));
     let code = c.vault_reveal(&v.vault).unwrap();
     assert!(!code.is_empty() && code.chars().all(|ch| ch != '\u{2022}'));
+    for it in &items {
+        let plain = c.vault_reveal(&it.vault).unwrap();
+        assert!(
+            !it.item.body.contains(&plain),
+            "otp_items body leaks the code"
+        );
+        assert!(it.item.body.contains('\u{2022}'));
+    }
     let mut bad: EncryptedOtpPayload = v.vault.clone();
     bad.ciphertext_b64 = "AAAA".into();
     assert!(c.vault_reveal(&bad).is_err());

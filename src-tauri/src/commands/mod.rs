@@ -4,14 +4,19 @@
 use sms_crypto::EncryptedOtpPayload;
 use sms_engine::budget::BudgetPlannerSummary;
 use sms_engine::cleanup::{CleanupBucketId, WeeklyScanReport};
+use sms_engine::inbox::ReminderItem;
 use sms_engine::translate::TranslationResult;
-use sms_store::{IngestReport, MessageCursor, ThreadCursor, ThreadPage, ThreadRow};
+use sms_store::{
+    InboxCounts, IncomingSms, IngestReport, MessageCursor, OutgoingSms, ProviderRef, SendStatus,
+    ThreadCursor, ThreadPage, ThreadRow,
+};
 use sms_types::{BudgetLimits, FinanceSummary, PaymentCycleConfig};
 use tauri::State;
+use zeroize::Zeroizing;
 
 use crate::core::{
-    AppState, BackupFile, Capabilities, MessagesPage, OtpItemView, RestoreReport,
-    platform_capabilities,
+    AppSettings, AppState, BackupFile, Capabilities, IncomingResult, MessagesPage, OtpItemView,
+    OutgoingResult, RestoreReport,
 };
 use crate::error::CmdResult;
 
@@ -79,6 +84,96 @@ pub async fn delete_messages(state: State<'_, AppState>, ids: Vec<i64>) -> CmdRe
 }
 
 #[tauri::command]
+pub async fn get_thread(
+    state: State<'_, AppState>,
+    thread_id: i64,
+) -> CmdResult<Option<ThreadRow>> {
+    state.run(move |c| c.get_thread(thread_id)).await
+}
+
+#[tauri::command]
+pub async fn inbox_counts(state: State<'_, AppState>, sim: Option<u8>) -> CmdResult<InboxCounts> {
+    state.run(move |c| c.inbox_counts(sim)).await
+}
+
+#[tauri::command]
+pub async fn reminders(state: State<'_, AppState>) -> CmdResult<Vec<ReminderItem>> {
+    state.run(|c| c.reminders()).await
+}
+
+#[tauri::command]
+pub async fn set_reminder_done(
+    state: State<'_, AppState>,
+    sms_id: i64,
+    done: bool,
+) -> CmdResult<()> {
+    state.run(move |c| c.set_reminder_done(sms_id, done)).await
+}
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> CmdResult<AppSettings> {
+    state.run(|c| c.get_settings()).await
+}
+
+/// Platform receive path (Android receiver via the plugin; dev simulator).
+#[tauri::command]
+pub async fn ingest_incoming(
+    state: State<'_, AppState>,
+    message: IncomingSms,
+    provider_id: Option<i64>,
+) -> CmdResult<IncomingResult> {
+    state
+        .run(move |c| c.ingest_incoming(&message, provider_id))
+        .await
+}
+
+#[tauri::command]
+pub async fn queue_outgoing(
+    state: State<'_, AppState>,
+    message: OutgoingSms,
+) -> CmdResult<OutgoingResult> {
+    state.run(move |c| c.queue_outgoing(&message)).await
+}
+
+#[tauri::command]
+pub async fn set_send_status(
+    state: State<'_, AppState>,
+    sms_id: i64,
+    status: SendStatus,
+    provider_id: Option<i64>,
+) -> CmdResult<bool> {
+    state
+        .run(move |c| c.set_send_status(sms_id, status, provider_id))
+        .await
+}
+
+#[tauri::command]
+pub async fn provider_refs(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+) -> CmdResult<Vec<ProviderRef>> {
+    state.run(move |c| c.provider_refs(&ids)).await
+}
+
+#[tauri::command]
+pub async fn provider_mark_read(
+    state: State<'_, AppState>,
+    provider_ids: Vec<i64>,
+) -> CmdResult<usize> {
+    state
+        .run(move |c| c.provider_mark_read(&provider_ids))
+        .await
+}
+
+#[tauri::command]
+pub async fn provider_delete(
+    state: State<'_, AppState>,
+    provider_ids: Vec<i64>,
+) -> CmdResult<usize> {
+    state.run(move |c| c.provider_delete(&provider_ids)).await
+}
+
+#[tauri::command]
 pub async fn finance_summary(
     state: State<'_, AppState>,
     only_active_cycle: bool,
@@ -126,6 +221,11 @@ pub async fn apply_cleanup(
 }
 
 #[tauri::command]
+pub async fn purge_expired_otps(state: State<'_, AppState>) -> CmdResult<usize> {
+    state.run(|c| c.purge_expired_otps()).await
+}
+
+#[tauri::command]
 pub async fn otp_items(state: State<'_, AppState>) -> CmdResult<Vec<OtpItemView>> {
     state.run(|c| c.otp_items()).await
 }
@@ -143,11 +243,15 @@ pub async fn translate(state: State<'_, AppState>, text: String) -> CmdResult<Tr
     state.run(move |c| c.translate(&text)).await
 }
 
+/// The passphrase `String` is moved into `Zeroizing` at once, so its buffer
+/// is wiped when the closure drops it (on success, error or panic). Copies in
+/// the IPC JSON payload owned by Tauri are outside this crate's control.
 #[tauri::command]
 pub async fn backup_create(
     state: State<'_, AppState>,
     passphrase: String,
 ) -> CmdResult<BackupFile> {
+    let passphrase = Zeroizing::new(passphrase);
     state.run(move |c| c.backup_create(&passphrase)).await
 }
 
@@ -157,14 +261,15 @@ pub async fn backup_restore(
     content: String,
     passphrase: String,
 ) -> CmdResult<RestoreReport> {
+    let passphrase = Zeroizing::new(passphrase);
     state
         .run(move |c| c.backup_restore(&content, &passphrase))
         .await
 }
 
 #[tauri::command]
-pub async fn capabilities() -> CmdResult<Capabilities> {
-    Ok(platform_capabilities())
+pub async fn capabilities(state: State<'_, AppState>) -> CmdResult<Capabilities> {
+    state.run(|c| Ok(c.capabilities())).await
 }
 
 /// Dev/debug only: rejects unless `debug_assertions` or `dev-seed` is on.
@@ -184,12 +289,24 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         archive,
         block,
         delete_messages,
+        get_thread,
+        inbox_counts,
+        reminders,
+        set_reminder_done,
+        get_settings,
+        ingest_incoming,
+        queue_outgoing,
+        set_send_status,
+        provider_refs,
+        provider_mark_read,
+        provider_delete,
         finance_summary,
         budget_stats,
         set_cycle,
         set_budget,
         weekly_scan,
         apply_cleanup,
+        purge_expired_otps,
         otp_items,
         vault_reveal,
         translate,
@@ -208,12 +325,24 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         archive,
         block,
         delete_messages,
+        get_thread,
+        inbox_counts,
+        reminders,
+        set_reminder_done,
+        get_settings,
+        ingest_incoming,
+        queue_outgoing,
+        set_send_status,
+        provider_refs,
+        provider_mark_read,
+        provider_delete,
         finance_summary,
         budget_stats,
         set_cycle,
         set_budget,
         weekly_scan,
         apply_cleanup,
+        purge_expired_otps,
         otp_items,
         vault_reveal,
         translate,

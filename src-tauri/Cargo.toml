@@ -35,3 +35,4 @@ sms-engine.workspace = true
 sms-store.workspace = true
 sms-crypto.workspace = true
 sms-testdata.workspace = true
+zeroize.workspace = true

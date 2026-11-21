@@ -9,9 +9,13 @@ use serde::{Deserialize, Serialize};
 use sms_crypto::{EncryptedOtpPayload, OtpVault};
 use sms_engine::budget::BudgetPlannerSummary;
 use sms_engine::cleanup::{CleanupBucketId, WeeklyScanReport};
-use sms_engine::inbox::{ActiveOtpItem, InboxFilter};
+use sms_engine::inbox::{ActiveOtpItem, InboxFilter, ReminderItem};
+use sms_engine::otp::redact_otp_code;
 use sms_engine::translate::{TranslationResult, translate_sms_to_english};
-use sms_store::{IngestReport, MessageCursor, Store, ThreadCursor, ThreadPage, ThreadRow};
+use sms_store::{
+    InboxCounts, IncomingSms, IngestReport, MessageCursor, OutgoingSms, ProviderRef, SendStatus,
+    Store, ThreadCursor, ThreadPage, ThreadRow,
+};
 use sms_types::{BudgetLimits, FinanceSummary, ParsedSms, PaymentCycleConfig};
 
 use crate::error::{CmdError, CmdResult};
@@ -21,6 +25,8 @@ pub const MAX_QUERY_CHARS: usize = 256;
 pub const MAX_IDS: usize = 20_000;
 pub const MAX_TRANSLATE_CHARS: usize = 20_000;
 pub const MAX_BACKUP_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_BODY_CHARS: usize = 20_000;
+pub const MAX_SENDER_CHARS: usize = 128;
 const DEFAULT_PAGE: usize = 50;
 
 const KEY_CYCLE: &str = "cycle_config";
@@ -29,6 +35,7 @@ const KEY_BUDGET: &str = "budget_limits";
 pub struct Core {
     store: Store,
     vault: OtpVault,
+    caps: Capabilities,
 }
 
 /// Shared handle stored in Tauri state.
@@ -72,11 +79,75 @@ pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// A stored message plus its send state (outgoing messages queued through
+/// `queue_outgoing`). Serialises as the flat `ParsedSms` JSON with an optional
+/// `sendStatus` key, so the frontend type is `ParsedSms & { sendStatus? }`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageView {
+    #[serde(flatten)]
+    pub parsed: ParsedSms,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_status: Option<SendStatus>,
+}
+
+impl std::ops::Deref for MessageView {
+    type Target = ParsedSms;
+    fn deref(&self) -> &ParsedSms {
+        &self.parsed
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MessagesPage {
-    pub messages: Vec<ParsedSms>,
+    pub messages: Vec<MessageView>,
     pub next: Option<MessageCursor>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    pub cycle_config: PaymentCycleConfig,
+    pub budget_limits: BudgetLimits,
+}
+
+/// What the platform shows for a newly received message. `message` is
+/// redacted: the body has the OTP masked and `otp.code` is bullets; the code
+/// is only in `otpVault` (decrypt with `vault_reveal`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationPayload {
+    /// False for a duplicate delivery, a blocked sender or a Spam thread.
+    pub notify: bool,
+    pub title: String,
+    pub message: ParsedSms,
+    pub otp_vault: Option<EncryptedOtpPayload>,
+    pub otp_expires_at_ms: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IncomingResult {
+    /// False when the provider id was already stored (nothing ingested).
+    pub inserted: bool,
+    pub thread: ThreadRow,
+    pub notification: NotificationPayload,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingResult {
+    pub message: MessageView,
+    pub thread: ThreadRow,
+}
+
+/// Mask the OTP in a message that leaves the core without an explicit reveal.
+pub fn redact_parsed(p: &mut ParsedSms) {
+    if let Some(otp) = p.otp.as_mut() {
+        p.sms.body = redact_otp_code(&p.sms.body, &otp.code);
+        otp.code = "\u{2022}".repeat(otp.code.chars().count());
+    }
 }
 
 /// OTP list entry: the plaintext code never crosses IPC in the list; the UI
@@ -104,18 +175,35 @@ pub struct RestoreReport {
     pub blocked_senders: usize,
 }
 
+/// Platform capabilities for the UI. The Linux build is a read-only backup
+/// viewer (no radio): `canSend` is false and `queue_outgoing` is rejected.
+/// On Android, `canSend` means the core accepts outgoing messages into the
+/// send queue; the radio send, the default-SMS role, RCS/MMS and the SIM count
+/// are reported by the telephony plugin (S12), so until it updates them they
+/// stay at the conservative values below.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct Capabilities {
     pub platform: &'static str,
+    pub can_send: bool,
+    pub read_only: bool,
+    pub default_sms_role: bool,
+    pub rcs: bool,
+    pub mms: bool,
+    /// SIM slots the store accepts (0 and 1).
+    pub sim_slots: u8,
 }
 
 pub fn platform_capabilities() -> Capabilities {
+    let android = cfg!(target_os = "android");
     Capabilities {
-        platform: if cfg!(target_os = "android") {
-            "android"
-        } else {
-            "linux"
-        },
+        platform: if android { "android" } else { "linux" },
+        can_send: android,
+        read_only: !android,
+        default_sms_role: false,
+        rcs: false,
+        mms: false,
+        sim_slots: 2,
     }
 }
 
@@ -145,12 +233,29 @@ fn valid_day(d: f64) -> bool {
     d.is_finite() && (1.0..=31.0).contains(&d)
 }
 
+fn check_text(s: &str, max: usize, what: &str) -> CmdResult<()> {
+    if s.chars().count() > max {
+        return Err(CmdError::invalid(&format!("{what} too long")));
+    }
+    Ok(())
+}
+
 impl Core {
     pub fn new(store: Store) -> Self {
+        Self::with_capabilities(store, platform_capabilities())
+    }
+
+    /// Test seam: a core that behaves as another platform would.
+    pub fn with_capabilities(store: Store, caps: Capabilities) -> Self {
         Core {
             store,
             vault: OtpVault::new_random(),
+            caps,
         }
+    }
+
+    pub fn capabilities(&self) -> Capabilities {
+        self.caps.clone()
     }
 
     pub fn store(&self) -> &Store {
@@ -195,6 +300,13 @@ impl Core {
 
     pub fn budget_limits(&self) -> CmdResult<BudgetLimits> {
         self.load_setting(KEY_BUDGET)
+    }
+
+    pub fn get_settings(&self) -> CmdResult<AppSettings> {
+        Ok(AppSettings {
+            cycle_config: self.cycle_config()?,
+            budget_limits: self.budget_limits()?,
+        })
     }
 
     pub fn set_cycle(&mut self, cfg: PaymentCycleConfig) -> CmdResult<PaymentCycleConfig> {
@@ -244,7 +356,36 @@ impl Core {
         let (messages, next) = self
             .store
             .messages_page(thread_id, before, page_limit(limit))?;
-        Ok(MessagesPage { messages, next })
+        Ok(MessagesPage {
+            messages: self.with_send_status(messages)?,
+            next,
+        })
+    }
+
+    fn with_send_status(&self, messages: Vec<ParsedSms>) -> CmdResult<Vec<MessageView>> {
+        let outgoing: Vec<i64> = messages
+            .iter()
+            .filter(|m| m.sms.is_outgoing)
+            .map(|m| m.sms.id)
+            .collect();
+        let status: std::collections::HashMap<i64, SendStatus> =
+            self.store.send_statuses(&outgoing)?.into_iter().collect();
+        Ok(messages
+            .into_iter()
+            .map(|parsed| MessageView {
+                send_status: status.get(&parsed.sms.id).copied(),
+                parsed,
+            })
+            .collect())
+    }
+
+    pub fn get_thread(&self, thread_id: i64) -> CmdResult<Option<ThreadRow>> {
+        Ok(self.store.thread(thread_id)?)
+    }
+
+    pub fn inbox_counts(&self, sim: Option<u8>) -> CmdResult<InboxCounts> {
+        check_sim(sim)?;
+        Ok(self.store.inbox_counts(sim)?)
     }
 
     pub fn search(
@@ -285,6 +426,121 @@ impl Core {
     pub fn delete_messages(&mut self, ids: &[i64]) -> CmdResult<usize> {
         check_ids(ids)?;
         Ok(self.store.delete_messages(ids)?)
+    }
+
+    // ---- reminders -----------------------------------------------------
+
+    pub fn reminders(&self) -> CmdResult<Vec<ReminderItem>> {
+        Ok(self.store.reminders()?)
+    }
+
+    pub fn set_reminder_done(&mut self, sms_id: i64, done: bool) -> CmdResult<()> {
+        Ok(self.store.set_reminder_done(sms_id, done)?)
+    }
+
+    // ---- platform: receive, send queue, provider sync -------------------
+
+    /// One message delivered by the platform (Android `SMS_DELIVER`, or the
+    /// dev simulator): classify, store, and build the notification payload.
+    pub fn ingest_incoming(
+        &mut self,
+        input: &IncomingSms,
+        provider_id: Option<i64>,
+    ) -> CmdResult<IncomingResult> {
+        if input.sender.trim().is_empty() {
+            return Err(CmdError::invalid("sender"));
+        }
+        check_text(&input.sender, MAX_SENDER_CHARS, "sender")?;
+        check_text(&input.body, MAX_BODY_CHARS, "body")?;
+        if let Some(c) = &input.contact_name {
+            check_text(c, MAX_SENDER_CHARS, "contactName")?;
+        }
+        let (raw, inserted) = self
+            .store
+            .ingest_from_provider(input, provider_id, now_ms())?;
+        let thread = self
+            .store
+            .thread(raw.thread_id)?
+            .ok_or_else(|| CmdError("thread missing after ingest".into()))?;
+        let mut message = self
+            .store
+            .message(raw.id)?
+            .ok_or_else(|| CmdError("message missing after ingest".into()))?;
+        let otp_vault = message
+            .otp
+            .as_ref()
+            .map(|o| self.vault.encrypt_otp(&o.code));
+        let otp_expires_at_ms = message
+            .otp
+            .as_ref()
+            .map(|o| sms_types::time::expiry_ms(message.sms.timestamp_ms, o.ttl_seconds));
+        redact_parsed(&mut message);
+        let notify = inserted
+            && !thread.is_blocked
+            && thread.classification.category != sms_types::Category::Spam;
+        Ok(IncomingResult {
+            inserted,
+            notification: NotificationPayload {
+                notify,
+                title: thread.display_name.clone(),
+                message,
+                otp_vault,
+                otp_expires_at_ms,
+            },
+            thread,
+        })
+    }
+
+    /// Store an outgoing SMS as `queued`. Rejected where the platform cannot
+    /// send (Linux is a read-only backup viewer).
+    pub fn queue_outgoing(&mut self, out: &OutgoingSms) -> CmdResult<OutgoingResult> {
+        if !self.caps.can_send {
+            return Err(CmdError("sending is not available on this device".into()));
+        }
+        check_text(&out.body, MAX_BODY_CHARS, "body")?;
+        if let Some(a) = &out.address {
+            check_text(a, MAX_SENDER_CHARS, "address")?;
+        }
+        let raw = self.store.queue_outgoing(out, now_ms())?;
+        let parsed = self
+            .store
+            .message(raw.id)?
+            .ok_or_else(|| CmdError("message missing after queue".into()))?;
+        let thread = self
+            .store
+            .thread(raw.thread_id)?
+            .ok_or_else(|| CmdError("thread missing after queue".into()))?;
+        Ok(OutgoingResult {
+            message: MessageView {
+                parsed,
+                send_status: Some(SendStatus::Queued),
+            },
+            thread,
+        })
+    }
+
+    pub fn set_send_status(
+        &mut self,
+        sms_id: i64,
+        status: SendStatus,
+        provider_id: Option<i64>,
+    ) -> CmdResult<bool> {
+        Ok(self.store.set_send_status(sms_id, status, provider_id)?)
+    }
+
+    pub fn provider_refs(&self, ids: &[i64]) -> CmdResult<Vec<ProviderRef>> {
+        check_ids(ids)?;
+        Ok(self.store.provider_refs(ids)?)
+    }
+
+    pub fn provider_mark_read(&mut self, provider_ids: &[i64]) -> CmdResult<usize> {
+        check_ids(provider_ids)?;
+        Ok(self.store.provider_mark_read(provider_ids)?)
+    }
+
+    pub fn provider_delete(&mut self, provider_ids: &[i64]) -> CmdResult<usize> {
+        check_ids(provider_ids)?;
+        Ok(self.store.provider_delete(provider_ids)?)
     }
 
     // ---- finance -------------------------------------------------------
@@ -331,10 +587,18 @@ impl Core {
             .into_iter()
             .map(|mut item| {
                 let vault = self.vault.encrypt_otp(&item.otp.code);
+                item.body = redact_otp_code(&item.body, &item.otp.code);
                 item.otp.code = "\u{2022}".repeat(item.otp.code.chars().count());
                 OtpItemView { item, vault }
             })
             .collect())
+    }
+
+    /// store.ts `purgeExpiredOtpMessages`: deletes OTP messages whose TTL
+    /// (24 h for every extracted OTP) has passed, unless they also carry a
+    /// transaction or reminder or are starred. Returns the number purged.
+    pub fn purge_expired_otps(&mut self) -> CmdResult<usize> {
+        Ok(self.store.purge_expired_otps(now_ms())?.len())
     }
 
     pub fn vault_reveal(&self, payload: &EncryptedOtpPayload) -> CmdResult<String> {
