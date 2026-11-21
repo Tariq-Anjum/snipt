@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sms-types", "crates/sms-engine", "crates/sms-testdata", "crates/sms-crypto"]
+members = ["crates/sms-types", "crates/sms-engine", "crates/sms-testdata", "crates/sms-crypto", "crates/sms-store"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,7 +23,7 @@ hmac = "=0.13.0"
 zeroize = "=1.9.2"
 base64 = "=0.23.1"
 getrandom = "=0.4.3"
-rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled"] }
+rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled", "cache"] }
 
 sms-types = { path = "crates/sms-types" }
 sms-engine = { path = "crates/sms-engine" }

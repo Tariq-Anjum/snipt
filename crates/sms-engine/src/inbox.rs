@@ -7,9 +7,9 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use sms_types::{
-    AccountBalance, Category, ExtractedOtp, ExtractedReminder, FinanceSummary,
-    FinanceTransactionItem, PaymentCycleConfig, PaymentMethod, RawSms, ThreadSummary, TopMerchant,
-    TxnDirection, js,
+    AccountBalance, Category, ExtractedOtp, ExtractedReminder, ExtractedTransaction,
+    FinanceSummary, FinanceTransactionItem, PaymentCycleConfig, PaymentMethod, RawSms,
+    ThreadSummary, TopMerchant, TxnDirection, js,
 };
 
 use crate::budget::{categorize_merchant_expense, is_timestamp_in_method_cycle};
@@ -124,8 +124,66 @@ pub fn filter_threads<'a>(
         .collect()
 }
 
+/// One message carrying a transaction, as consumed by [`compute_finance_summary_from`].
+#[derive(Clone, Debug)]
+pub struct FinanceMessage<'a> {
+    pub sms_id: i64,
+    pub timestamp_ms: i64,
+    pub sim_slot: u8,
+    pub body: &'a str,
+    pub txn: &'a ExtractedTransaction,
+}
+
+/// Thread view for finance aggregation (threads in list order, messages oldest first).
+#[derive(Clone, Debug)]
+pub struct FinanceThread<'a> {
+    pub thread_id: i64,
+    pub display_name: &'a str,
+    pub is_blocked: bool,
+    pub messages: Vec<FinanceMessage<'a>>,
+}
+
 pub fn compute_finance_summary(
     threads: &[ThreadSummary],
+    cycle_config: &PaymentCycleConfig,
+    now_ms: i64,
+    only_active_cycle: bool,
+    tz_offset_min: i32,
+) -> FinanceSummary {
+    let inputs: Vec<FinanceThread<'_>> = threads
+        .iter()
+        .map(|t| FinanceThread {
+            thread_id: t.thread_id,
+            display_name: &t.display_name,
+            is_blocked: t.is_blocked,
+            messages: t
+                .messages
+                .iter()
+                .filter_map(|m| {
+                    m.transaction.as_ref().map(|txn| FinanceMessage {
+                        sms_id: m.sms.id,
+                        timestamp_ms: m.sms.timestamp_ms,
+                        sim_slot: m.sms.sim_slot,
+                        body: &m.sms.body,
+                        txn,
+                    })
+                })
+                .collect(),
+        })
+        .collect();
+    compute_finance_summary_from(
+        &inputs,
+        cycle_config,
+        now_ms,
+        only_active_cycle,
+        tz_offset_min,
+    )
+}
+
+/// Port of store.ts `computeFinanceSummary` over an abstract thread view
+/// (shared by the in-memory path and sms-store).
+pub fn compute_finance_summary_from(
+    threads: &[FinanceThread<'_>],
     cycle_config: &PaymentCycleConfig,
     now_ms: i64,
     only_active_cycle: bool,
@@ -144,25 +202,23 @@ pub fn compute_finance_summary(
             continue;
         }
         for msg in &thread.messages {
-            let Some(txn) = &msg.transaction else {
-                continue;
-            };
+            let txn = msg.txn;
             let in_active = is_timestamp_in_method_cycle(
-                msg.sms.timestamp_ms,
+                msg.timestamp_ms,
                 txn.payment_method,
                 cycle_config,
                 now_ms,
                 tz_offset_min,
             );
             let budget_category =
-                categorize_merchant_expense(txn.merchant_or_vpa.as_deref(), &msg.sms.body);
+                categorize_merchant_expense(txn.merchant_or_vpa.as_deref(), msg.body);
             transactions.push(FinanceTransactionItem {
-                sms_id: msg.sms.id,
+                sms_id: msg.sms_id,
                 thread_id: thread.thread_id,
-                sender: thread.display_name.clone(),
-                timestamp_ms: msg.sms.timestamp_ms,
-                sim_slot: msg.sms.sim_slot,
-                body: msg.sms.body.clone(),
+                sender: thread.display_name.to_string(),
+                timestamp_ms: msg.timestamp_ms,
+                sim_slot: msg.sim_slot,
+                body: msg.body.to_string(),
                 txn: txn.clone(),
                 budget_category,
                 in_active_cycle: in_active,
@@ -181,7 +237,7 @@ pub fn compute_finance_summary(
                             .merchant_or_vpa
                             .clone()
                             .filter(|m| !m.is_empty())
-                            .unwrap_or_else(|| thread.display_name.clone());
+                            .unwrap_or_else(|| thread.display_name.to_string());
                         let e = merch.entry(key.clone()).or_insert_with(|| {
                             merch_order.push(key);
                             (0.0, 0, txn.payment_method)
@@ -203,11 +259,11 @@ pub fn compute_finance_summary(
                 };
                 let key = format!(
                     "{prefix}-{}",
-                    txn.account_last4.as_deref().unwrap_or(&thread.display_name)
+                    txn.account_last4.as_deref().unwrap_or(thread.display_name)
                 );
                 let replace = bal
                     .get(&key)
-                    .is_none_or(|e| msg.sms.timestamp_ms > e.updated_at_ms);
+                    .is_none_or(|e| msg.timestamp_ms > e.updated_at_ms);
                 if replace {
                     if !bal.contains_key(&key) {
                         bal_order.push(key.clone());
@@ -219,10 +275,10 @@ pub fn compute_finance_summary(
                                 .account_last4
                                 .clone()
                                 .unwrap_or_else(|| "Main".into()),
-                            bank_label: thread.display_name.clone(),
+                            bank_label: thread.display_name.to_string(),
                             payment_method: txn.payment_method,
                             balance,
-                            updated_at_ms: msg.sms.timestamp_ms,
+                            updated_at_ms: msg.timestamp_ms,
                         },
                     );
                 }

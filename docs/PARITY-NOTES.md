@@ -24,3 +24,12 @@ deterministic). Rust is kept equal to TS; deviations are listed here.
   categories could in theory flip; none occurs in fixtures.
 - `toLowerCase()` Unicode tables of V8's ICU vs Rust's `char::to_lowercase` may differ for
   characters added in newer Unicode versions.
+
+## sms-store vs store.ts (in-memory arrays → SQLite)
+- Thread list ties on `latest_ts` are ordered by `thread_id DESC` (keyset paging needs a total
+  order); TS keeps first-appearance order. No ties in fixtures.
+- Stable-sort tie-breaker inside a thread is `ins_seq` (insertion order = TS array order).
+- Search: FTS5 trigram only narrows candidates (tokens ≥ 3 chars); every hit is verified in Rust
+  with JS lowercase semantics, so there are no false positives. A false negative is possible only
+  where SQLite's trigram case folding differs from JS `toLowerCase()` on non-ASCII text.
+- OTP/reminder list ordering among equal timestamps follows thread list order, then `ins_seq`.

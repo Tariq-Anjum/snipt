@@ -1,0 +1,19 @@
+[package]
+name = "sms-store"
+description = "mySMS SQLite store (bundled SQLite, FTS5 trigram), incremental threads, keyset paging, finance queries."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+sms-types.workspace = true
+sms-engine.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+sms-testdata.workspace = true
