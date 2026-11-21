@@ -1,0 +1,24 @@
+[package]
+name = "sms-crypto"
+description = "mySMS .mysms.enc backup (PBKDF2-SHA256 + AES-256-GCM, v1-compatible with the TS prototype) and OTP vault."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+sms-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+aes-gcm = { workspace = true, features = ["zeroize"] }
+pbkdf2.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+zeroize.workspace = true
+base64.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+sms-testdata.workspace = true

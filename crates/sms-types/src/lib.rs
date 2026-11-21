@@ -10,6 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod js;
+pub mod time;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Category {
