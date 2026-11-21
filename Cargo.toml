@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/sms-types"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Exact pins from docs/ARCHITECTURE.md §11 (verified with `cargo info` 2026-11-22).
+[workspace.dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+thiserror = "=2.0.21"
+regex = "=1.13.2"
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
+aes-gcm = "=0.11.1"
+pbkdf2 = "=0.13.0"
+sha2 = "=0.11.1"
+hmac = "=0.13.0"
+zeroize = "=1.9.2"
+base64 = "=0.23.1"
+getrandom = "=0.4.3"
+rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled"] }
+
+sms-types = { path = "crates/sms-types" }
+sms-engine = { path = "crates/sms-engine" }
+sms-testdata = { path = "crates/sms-testdata" }
+sms-crypto = { path = "crates/sms-crypto" }
+sms-store = { path = "crates/sms-store" }
+
+[profile.release]
+debug = false
