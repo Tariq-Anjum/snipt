@@ -7,9 +7,9 @@
 #![forbid(unsafe_code)]
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use rusqlite::{Connection, Transaction, TransactionBehavior};
+use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior};
 use sms_engine::SmsEngine;
 
 pub mod finance;
@@ -48,6 +48,28 @@ pub(crate) fn write_tx(conn: &mut Connection) -> rusqlite::Result<Transaction<'_
     conn.transaction_with_behavior(TransactionBehavior::Immediate)
 }
 
+const BUSY_TIMEOUT: Duration = Duration::from_millis(3000);
+
+/// `PRAGMA journal_mode=WAL` with a bounded retry. On a fresh file, a
+/// concurrent first open can make the mode switch fail with SQLITE_BUSY
+/// without SQLite invoking the busy handler (observed in
+/// `tests/concurrency.rs`), so retry up to the busy timeout. WAL mode is
+/// persistent: once any connection has switched, the retry succeeds at once.
+fn enable_wal(conn: &Connection) -> rusqlite::Result<()> {
+    let deadline = Instant::now() + BUSY_TIMEOUT;
+    loop {
+        match conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get::<_, String>(0)) {
+            Ok(_) => return Ok(()),
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == ErrorCode::DatabaseBusy && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 pub struct Store {
     pub(crate) conn: Connection,
     pub(crate) engine: SmsEngine,
@@ -65,9 +87,8 @@ impl Store {
     }
 
     fn init(mut conn: Connection, tz_offset_min: i32) -> Result<Store> {
-        conn.busy_timeout(Duration::from_millis(3000))?;
-        let _mode: String =
-            conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        enable_wal(&conn)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         migrate::migrate(&mut conn)?;

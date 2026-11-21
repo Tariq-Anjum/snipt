@@ -94,3 +94,28 @@ fn two_connections_wal_read_modify_write() {
         .unwrap();
     assert_eq!(left, 0);
 }
+
+/// R1 blocker: simultaneous first opens of a fresh file must not both run the
+/// v0→v1 migration (`table messages already exists`).
+#[test]
+fn simultaneous_first_open_migrates_once() {
+    for round in 0..10 {
+        let dir = TempDir::new(&format!("open{round}"));
+        let path = dir.0.join("t.db");
+        const K: usize = 6;
+        let barrier = Arc::new(Barrier::new(K));
+        let opens: Vec<_> = (0..K)
+            .map(|_| {
+                let (path, barrier) = (path.clone(), barrier.clone());
+                thread::spawn(move || {
+                    barrier.wait();
+                    let s = Store::open(&path, TZ).map_err(|e| e.to_string())?;
+                    s.schema_version().map_err(|e| e.to_string())
+                })
+            })
+            .collect();
+        for h in opens {
+            assert_eq!(h.join().unwrap(), Ok(1), "round {round}");
+        }
+    }
+}
