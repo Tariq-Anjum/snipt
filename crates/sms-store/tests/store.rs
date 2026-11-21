@@ -435,3 +435,44 @@ fn otp_expiry_saturates_for_extreme_stored_timestamps() {
     let scan = s.weekly_scan(now).unwrap();
     assert!(!scan.buckets.iter().any(|b| b.message_ids.contains(&id)));
 }
+
+/// R1 optional: tokens whose SQLite trigram folding differs from JS
+/// `toLowerCase()` (İ, final sigma) or that FTS5 cannot parse (NUL) must still
+/// match, via the exact scan.
+#[test]
+fn search_tokens_fts_cannot_represent() {
+    let (now, _) = seed();
+    let mut s = Store::open_in_memory(TZ).unwrap();
+    for (sender, body) in [
+        ("VM-TRAVEL-S", "Flight to İSTANBUL confirmed for 24 Nov."),
+        ("VM-GREEK-S", "ΟΔΟΣ ΑΘΗΝΑΣ 12 delivery today."),
+        ("VM-NULLS-S", "code\0word alpha"),
+        ("VM-HINDI-S", "आपका बिल भुगतान सफल रहा"),
+    ] {
+        let m = IncomingSms {
+            sender: sender.into(),
+            contact_name: None,
+            body: body.into(),
+            is_known_contact: false,
+            sim_slot: 0,
+            protocol: None,
+            timestamp_ms: Some(now),
+        };
+        s.ingest_incoming(&m, now).unwrap();
+    }
+    let senders = |q: &str| -> Vec<String> {
+        s.search(InboxFilter::All, None, q, 50)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.sender)
+            .collect()
+    };
+    assert_eq!(senders("İSTANBUL"), ["VM-TRAVEL-S"]);
+    assert_eq!(senders("i\u{307}stanbul"), ["VM-TRAVEL-S"]);
+    assert_eq!(senders("stanbul"), ["VM-TRAVEL-S"]);
+    assert_eq!(senders("ΟΔΟΣ"), ["VM-GREEK-S"]);
+    assert_eq!(senders("e\0w"), ["VM-NULLS-S"]);
+    assert_eq!(senders("code\0word"), ["VM-NULLS-S"]);
+    assert_eq!(senders("भुगतान"), ["VM-HINDI-S"]);
+    assert!(senders("istanbul").is_empty()); // JS: "i̇stanbul" lacks "ist"
+}

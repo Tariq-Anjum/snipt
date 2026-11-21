@@ -3,9 +3,10 @@
 //! sender, "rcs"/"sms", and for each of the thread's latest 60 messages: body,
 //! OTP code, merchant, payment method, reference, reminder reference.
 //!
-//! FTS5 trigram narrows candidates for tokens of ≥ 3 characters; every
-//! candidate is then verified exactly in Rust with JS lowercase semantics, so
-//! results never include false positives. Shorter tokens scan the windows.
+//! FTS5 trigram narrows candidates for tokens of ≥ 3 characters that it can
+//! represent faithfully (`fts_usable`); every candidate is then verified
+//! exactly in Rust with JS lowercase semantics, so results never include false
+//! positives. Other tokens scan the windows.
 
 use std::collections::{HashMap, HashSet};
 
@@ -22,6 +23,25 @@ const WINDOW: i64 = 60;
 /// FTS5 phrase literal for a token (double quotes doubled).
 fn fts_phrase(tok: &str) -> String {
     format!("\"{}\"", tok.replace('"', "\"\""))
+}
+
+/// True when the FTS5 trigram index can narrow candidates for `tok` without
+/// false negatives: at least 3 chars, no NUL (the FTS5 query parser cannot
+/// represent it), and every char is ASCII or caseless and not a combining
+/// mark. SQLite's trigram case folding differs from JS `toLowerCase()` for
+/// some cased non-ASCII text (`İ` → `i̇`, final sigma `ς`), so such tokens use
+/// the exact scan instead. The only non-ASCII chars whose JS lowercase is
+/// ASCII (U+212A KELVIN SIGN → `k`, U+0130 → `i` + U+0307) fold compatibly
+/// in SQLite or leave a combining mark in the token.
+fn fts_usable(tok: &str) -> bool {
+    tok.chars().count() >= 3
+        && tok.chars().all(|c| {
+            c != '\0'
+                && (c.is_ascii()
+                    || (!('\u{300}'..='\u{36F}').contains(&c)
+                        && c.to_lowercase().eq([c])
+                        && c.to_uppercase().eq([c])))
+        })
 }
 
 impl Store {
@@ -83,7 +103,7 @@ impl Store {
                 .map(|t| t.thread_id)
                 .collect();
 
-            let rows: Vec<(i64, i64, i64, String, String)> = if tok.chars().count() >= 3 {
+            let rows: Vec<(i64, i64, i64, String, String)> = if fts_usable(tok) {
                 let mut s = self.conn.prepare_cached(
                     "SELECT m.thread_id, m.ts_ms, m.ins_seq, m.body, m.search_extra
                      FROM messages_fts f JOIN messages m ON m.id = f.rowid

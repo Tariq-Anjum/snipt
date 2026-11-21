@@ -38,7 +38,10 @@ deterministic). Rust is kept equal to TS; deviations are listed here.
 - Thread list ties on `latest_ts` are ordered by `thread_id DESC` (keyset paging needs a total
   order); TS keeps first-appearance order. No ties in fixtures.
 - Stable-sort tie-breaker inside a thread is `ins_seq` (insertion order = TS array order).
-- Search: FTS5 trigram only narrows candidates (tokens ≥ 3 chars); every hit is verified in Rust
-  with JS lowercase semantics, so there are no false positives. A false negative is possible only
-  where SQLite's trigram case folding differs from JS `toLowerCase()` on non-ASCII text.
+- Search: FTS5 trigram only narrows candidates; every hit is verified in Rust with JS lowercase
+  semantics, so there are no false positives. FTS is used only for tokens of ≥ 3 chars made of
+  ASCII or caseless non-combining chars (`search.rs` `fts_usable`); tokens with cased non-ASCII
+  letters (SQLite folds `İ`/final `ς` differently from JS), combining marks or NUL use the exact
+  scan, so no false negatives either (test `search_tokens_fts_cannot_represent`). Cost: such
+  tokens scan the whole history instead of the index.
 - OTP/reminder list ordering among equal timestamps follows thread list order, then `ins_seq`.
