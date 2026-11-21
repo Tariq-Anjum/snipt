@@ -1,0 +1,6 @@
+{
+  "name": "Kova SMS",
+  "description": "Offline-first SMS organizer, UPI & bank expense ledger, OTP vault, smart reminders, and Rust core Android architecture.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
