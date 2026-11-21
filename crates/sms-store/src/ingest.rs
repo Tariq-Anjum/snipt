@@ -166,6 +166,19 @@ impl Store {
     /// Port of store.ts `ingestIncomingSms`: assigns id / thread id, un-archives
     /// the thread, classifies, stores. `now_ms` is used when no timestamp given.
     pub fn ingest_incoming(&mut self, input: &IncomingSms, now_ms: i64) -> Result<RawSms> {
+        Ok(self.ingest_from_provider(input, None, now_ms)?.0)
+    }
+
+    /// [`Store::ingest_incoming`] for a message that also exists in the
+    /// platform provider (Android `content://sms` `_id`). A provider id that is
+    /// already stored is not ingested again: the stored message is returned
+    /// with `false`, so receiver retries and re-syncs are idempotent.
+    pub fn ingest_from_provider(
+        &mut self,
+        input: &IncomingSms,
+        provider_id: Option<i64>,
+        now_ms: i64,
+    ) -> Result<(RawSms, bool)> {
         if input.sim_slot > 1 {
             return Err(StoreError::Invalid("simSlot must be 0 or 1"));
         }
@@ -173,6 +186,19 @@ impl Store {
             return Err(StoreError::Invalid("timestampMs out of range"));
         }
         let tx = crate::write_tx(&mut self.conn)?;
+        if let Some(pid) = provider_id {
+            let sql = format!(
+                "SELECT {} FROM messages WHERE provider_id = ?1",
+                crate::query::RAW_COLS
+            );
+            let existing = tx
+                .prepare_cached(&sql)?
+                .query_row([pid], crate::query::raw_from_row)
+                .optional()?;
+            if let Some(raw) = existing {
+                return Ok((raw, false));
+            }
+        }
         let normalized = js::trim(&input.sender).to_string();
         let existing: Option<(i64, Option<String>)> = tx
             .prepare_cached(
@@ -219,12 +245,18 @@ impl Store {
         };
         let a = self.engine.analyze(&sms);
         insert_message(&tx, &sms, &a)?;
+        if let Some(pid) = provider_id {
+            tx.execute(
+                "UPDATE messages SET provider_id = ?2, provider_kind = 'sms' WHERE id = ?1",
+                params![sms.id, pid],
+            )?;
+        }
         tx.execute(
             "DELETE FROM archived_threads WHERE thread_id = ?1",
             [thread_id],
         )?;
         recompute_thread(&tx, thread_id)?;
         tx.commit()?;
-        Ok(sms)
+        Ok((sms, true))
     }
 }

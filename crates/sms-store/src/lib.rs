@@ -15,12 +15,14 @@ use sms_engine::SmsEngine;
 pub mod finance;
 pub mod ingest;
 pub mod migrate;
+pub mod platform;
 pub mod query;
 pub mod schema;
 pub mod search;
 pub mod threads;
 
 pub use ingest::{IncomingSms, IngestReport};
+pub use platform::{FilterCounts, InboxCounts, OutgoingSms, ProviderRef, SendStatus};
 pub use query::MessageCursor;
 pub use threads::{ThreadCursor, ThreadPage, ThreadRow};
 
