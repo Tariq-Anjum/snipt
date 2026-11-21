@@ -34,6 +34,18 @@ deterministic). Rust is kept equal to TS; deviations are listed here.
   age arithmetic saturates (`sms_types::time::expiry_ms`, `saturating_sub`), so far-future rows
   never wrap into "expired" and far-past rows count as old.
 
+## Billing cycles across DST (R1 optional, not fixed)
+- `get_cycle_window` / `Store::tz_offset_min` use ONE fixed UTC offset for both cycle boundaries.
+  TS `new Date(y, m, d)` resolves the local offset separately at each boundary, so in DST zones
+  (e.g. America/New_York, March 2026: start at UTC−5, end at UTC−4) the Rust window can be shifted
+  by one hour at one end; a transaction within an hour of local midnight on a boundary day can land
+  in a different cycle. Asia/Kolkata (no DST; all fixtures) is exact.
+- Not fixed because it is not API-compatible: per-boundary resolution needs an offset-at-instant
+  source (a tz database such as `chrono-tz`, or a platform callback) threaded through
+  `Store`/`sms-engine` and the Tauri layer, which currently pass a single `i32`. Fix when a
+  non-DST-free market is in scope: replace `tz_offset_min: i32` with an `offset_at(ms) -> i32`
+  resolver and compute start/end offsets independently.
+
 ## sms-store vs store.ts (in-memory arrays → SQLite)
 - Thread list ties on `latest_ts` are ordered by `thread_id DESC` (keyset paging needs a total
   order); TS keeps first-appearance order. No ties in fixtures.
