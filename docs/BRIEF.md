@@ -35,3 +35,9 @@ See `docs/ORIGIN.md`.
 - Source in repo; `cargo test` green; engine parity tests vs the 10 TS test cases.
 - `dist/mySMS-arm64.apk` (signed with a local keystore stored OUTSIDE git) and `dist/mySMS-linux-x86_64` (+ `install-linux.sh` user-scoped, .desktop, icon).
 - Review report by Codex Sol-6.2; blockers fixed; `docs/RESULT.md` with exact install steps for phone and Linux.
+
+## FINAL NAME (owner delegated, decided 2026-11-22): **Snipt**
+Meaning: "snipped and sorted" — Snipt cuts the SMS noise (spam, expired OTPs, promos) and keeps what matters (money, codes, people). Gen-Z spelling, 5 letters, one word.
+- User-facing name everywhere: app label, window title, icon label, install script, .desktop, docs. Tagline: "Snip the noise."
+- applicationId / identifier: `app.snipt.sms` (decide before first install; changing it later = a different app). Linux binary: `snipt`. Backup extension `.mysms.enc` stays (format compat); new files may use `.snipt.enc` only if the reader accepts both.
+- Internal crate names (`sms-*`) and the GitHub repo `mySMS` stay as is; renaming the repo is owner-run. Trademark/Play-name availability NOT checked; check before Play submission.
