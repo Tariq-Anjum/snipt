@@ -157,8 +157,9 @@ pub async fn block(state: State<'_, AppState>, sender: String, blocked: bool) ->
 #[serde(rename_all = "camelCase")]
 pub struct DeleteOutcome {
     pub deleted: usize,
-    /// Messages kept because their provider row could not be deleted
-    /// (still visible, retryable).
+    /// Requested messages that are still stored: their provider row could
+    /// not be deleted, or a send hand-off was in progress (R4 #4). Visible
+    /// and retryable.
     pub failed_ids: Vec<i64>,
 }
 
@@ -195,7 +196,13 @@ pub async fn delete_messages<R: Runtime>(
     }
     let keep: HashSet<i64> = failed_ids.iter().copied().collect();
     let delete: Vec<i64> = ids.into_iter().filter(|i| !keep.contains(i)).collect();
-    let deleted = state.run(move |c| c.delete_messages(&delete)).await?;
+    let (deleted, kept) = state
+        .run(move |c| {
+            let n = c.delete_messages(&delete)?;
+            Ok((n, c.existing(&delete)?))
+        })
+        .await?;
+    failed_ids.extend(kept);
     Ok(DeleteOutcome {
         deleted,
         failed_ids,

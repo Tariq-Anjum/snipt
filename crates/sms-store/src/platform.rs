@@ -96,6 +96,12 @@ pub struct InboxCounts {
 /// delivered`; `failed` and `delivered` are terminal. `unconfirmed` = every
 /// part was sent and a delivery report arrived for each, but at least one
 /// report could not be interpreted.
+///
+/// `indeterminate` (R4 #4): the hand-off was interrupted (a legacy v1
+/// in-flight send, or the process died between opening an attempt and the
+/// radio accepting it), so whether the radio got the message is unknown. It
+/// is never resent; only a real radio callback (sent / delivered / failed)
+/// can still move it.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum SendStatus {
@@ -105,6 +111,7 @@ pub enum SendStatus {
     Unconfirmed,
     Delivered,
     Failed,
+    Indeterminate,
 }
 
 impl SendStatus {
@@ -116,6 +123,7 @@ impl SendStatus {
             SendStatus::Unconfirmed => "unconfirmed",
             SendStatus::Delivered => "delivered",
             SendStatus::Failed => "failed",
+            SendStatus::Indeterminate => "indeterminate",
         }
     }
 
@@ -127,6 +135,7 @@ impl SendStatus {
             "unconfirmed" => SendStatus::Unconfirmed,
             "delivered" => SendStatus::Delivered,
             "failed" => SendStatus::Failed,
+            "indeterminate" => SendStatus::Indeterminate,
             _ => return None,
         })
     }
@@ -139,6 +148,7 @@ impl SendStatus {
             SendStatus::Unconfirmed => 3,
             SendStatus::Delivered => 4,
             SendStatus::Failed => 5,
+            SendStatus::Indeterminate => 6,
         }
     }
 
@@ -148,6 +158,15 @@ impl SendStatus {
     pub fn can_advance(self, to: SendStatus) -> bool {
         match (self, to) {
             (a, b) if a == b => false,
+            // Only set by recovery / migration, never by a transition.
+            (_, SendStatus::Indeterminate) => false,
+            (SendStatus::Indeterminate, b) => matches!(
+                b,
+                SendStatus::Sent
+                    | SendStatus::Unconfirmed
+                    | SendStatus::Delivered
+                    | SendStatus::Failed
+            ),
             (SendStatus::Failed | SendStatus::Delivered, _) => false,
             (_, SendStatus::Failed) => true,
             (a, b) => b.rank() > a.rank(),
@@ -399,6 +418,8 @@ impl Store {
     /// Start the radio hand-off of a queued outgoing message: a new attempt
     /// id (AUTOINCREMENT, never reused) that every callback carries. Only a
     /// `queued` message can start an attempt; the message becomes `sending`.
+    /// The hand-off stays open (the message cannot be deleted) until
+    /// [`Store::end_send_handoff`].
     pub fn begin_send_attempt(&mut self, sms_id: i64, parts: u32, now_ms: i64) -> Result<i64> {
         if parts == 0 || parts > 255 {
             return Err(StoreError::Invalid("parts out of range"));
@@ -410,13 +431,76 @@ impl Store {
             return Err(StoreError::Invalid("message is not queued"));
         }
         tx.prepare_cached(
-            "INSERT INTO send_attempts(msg_id, parts, created_ms) VALUES (?1, ?2, ?3)",
+            "INSERT INTO send_attempts(msg_id, parts, created_ms, handoff) VALUES (?1, ?2, ?3, 0)",
         )?
         .execute(params![sms_id, parts, now_ms])?;
         let attempt = tx.last_insert_rowid();
         advance_status(&tx, sms_id, SendStatus::Sending)?;
         tx.commit()?;
         Ok(attempt)
+    }
+
+    /// Close an attempt's hand-off (R4 #4). `handed_off` = the radio
+    /// accepted the request; otherwise (provider binding refused, radio
+    /// rejected, aborted) the message moves to `failed`. Returns the
+    /// persisted state, `None` for an unknown attempt.
+    pub fn end_send_handoff(
+        &mut self,
+        attempt_id: i64,
+        handed_off: bool,
+    ) -> Result<Option<SendUpdate>> {
+        let tx = crate::write_tx(&mut self.conn)?;
+        let msg: Option<i64> = tx
+            .prepare_cached("SELECT msg_id FROM send_attempts WHERE attempt_id = ?1")?
+            .query_row([attempt_id], |r| r.get(0))
+            .optional()?;
+        let Some(msg_id) = msg else {
+            return Ok(None);
+        };
+        tx.prepare_cached("UPDATE send_attempts SET handoff = 1 WHERE attempt_id = ?1")?
+            .execute([attempt_id])?;
+        let to = if handed_off {
+            SendStatus::Sending
+        } else {
+            SendStatus::Failed
+        };
+        let r = advance_status(&tx, msg_id, to)?;
+        tx.commit()?;
+        Ok(r)
+    }
+
+    /// Hand-offs left open by a process that died mid hand-off (call once
+    /// per process, before any send starts). Whether the radio got such a
+    /// message is unknown: a still-`sending` message without any callback
+    /// becomes `indeterminate` (never resent); the hand-off is closed so it
+    /// can be deleted. Returns the number of attempts closed.
+    pub fn recover_interrupted_handoffs(&mut self) -> Result<usize> {
+        let tx = crate::write_tx(&mut self.conn)?;
+        tx.execute(
+            "UPDATE messages SET send_status = 'indeterminate'
+             WHERE send_status = 'sending' AND id IN (
+                 SELECT a.msg_id FROM send_attempts a WHERE a.handoff = 0
+                   AND NOT EXISTS (SELECT 1 FROM send_part_results r
+                                   WHERE r.attempt_id = a.attempt_id))",
+            [],
+        )?;
+        let n = tx.execute("UPDATE send_attempts SET handoff = 1 WHERE handoff = 0", [])?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Messages among `ids` with an open send hand-off (not deletable now).
+    pub fn handoff_open(&self, ids: &[i64]) -> Result<Vec<i64>> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT 1 FROM send_attempts WHERE msg_id = ?1 AND handoff = 0 LIMIT 1",
+        )?;
+        let mut out = Vec::new();
+        for id in ids {
+            if st.exists([id])? {
+                out.push(*id);
+            }
+        }
+        Ok(out)
     }
 
     /// Bind the provider row the platform wrote for an attempt. Binding is
@@ -607,8 +691,22 @@ impl Store {
         self.delete_messages(&ids)
     }
 
-    /// Local candidate set for [`Store::provider_reconcile`]: every stored
-    /// `(id, provider_id)`. Must be captured *before* the provider query.
+    /// Local snapshot for [`Store::provider_reconcile`]: every stored
+    /// `(id, provider_id)` and every tombstone. Must be captured *before*
+    /// the provider query.
+    pub fn provider_snapshot(&self) -> Result<ReconcileSnapshot> {
+        let tombstones = self
+            .conn
+            .prepare_cached("SELECT provider_id FROM provider_tombstones ORDER BY provider_id")?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<i64>>>()?;
+        Ok(ReconcileSnapshot {
+            candidates: self.provider_candidates()?,
+            tombstones,
+        })
+    }
+
+    /// Local candidate set (the `candidates` of [`Store::provider_snapshot`]).
     pub fn provider_candidates(&self) -> Result<Vec<ProviderRef>> {
         let mut st = self.conn.prepare_cached(
             "SELECT id, provider_id FROM messages WHERE provider_id IS NOT NULL ORDER BY id",
@@ -635,9 +733,16 @@ impl Store {
     /// replays them (a receipt whose ingest was lost). An empty `present`
     /// with candidates is refused (a failed or permission-less provider query
     /// must not wipe the inbox). One transaction.
+    ///
+    /// Tombstones are pruned only when they were in `tombstones` (snapshot
+    /// taken before the provider query) and the provider row is absent: a
+    /// tombstone created after the snapshot (an SMS that arrived after the
+    /// provider query and was deleted locally before this call) is kept, so
+    /// the next replay cannot resurrect it (R4 #5).
     pub fn provider_reconcile(
         &mut self,
         candidates: &[ProviderRef],
+        tombstones: &[i64],
         present: &[i64],
         read: &[i64],
         inbox: &[i64],
@@ -660,12 +765,15 @@ impl Store {
                 .query_row(params![c.id, c.provider_id], |r| r.get(0))
                 .optional()?;
             if let Some(t) = t {
-                deleted += tx
-                    .prepare_cached("DELETE FROM messages WHERE id = ?1")?
+                let n = tx
+                    .prepare_cached(crate::threads::DELETE_UNLESS_HANDOFF)?
                     .execute([c.id])?;
-                tx.prepare_cached("DELETE FROM reminders_done WHERE msg_id = ?1")?
-                    .execute([c.id])?;
-                touched.insert(t);
+                if n > 0 {
+                    tx.prepare_cached("DELETE FROM reminders_done WHERE msg_id = ?1")?
+                        .execute([c.id])?;
+                    touched.insert(t);
+                }
+                deleted += n;
             }
         }
         let mut marked_read = 0;
@@ -687,12 +795,9 @@ impl Store {
         for t in touched {
             recompute_thread(&tx, t)?;
         }
-        // Tombstones of provider rows that are gone everywhere are done.
-        let tombs: Vec<i64> = tx
-            .prepare_cached("SELECT provider_id FROM provider_tombstones")?
-            .query_map([], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        for t in tombs.into_iter().filter(|t| !present.contains(t)) {
+        // Tombstones (from the pre-query snapshot) of provider rows that are
+        // gone everywhere are done.
+        for t in tombstones.iter().filter(|t| !present.contains(t)) {
             tx.prepare_cached("DELETE FROM provider_tombstones WHERE provider_id = ?1")?
                 .execute([t])?;
         }
@@ -723,6 +828,38 @@ impl Store {
             missing,
         })
     }
+}
+
+impl Store {
+    /// Explicit "import missing messages" (R4 #5 recovery path for
+    /// pre-v2 rows): the provider inbox ids among `inbox` that the store
+    /// neither holds nor deleted locally (tombstones), ignoring the v1
+    /// replay floor. v1 recorded no deletions, so rows below the floor are
+    /// ambiguous (missed receipt or deleted under v1); this runs only on an
+    /// explicit user action or the first-run import, never in the automatic
+    /// replay.
+    pub fn provider_missing(&self, inbox: &[i64]) -> Result<Vec<i64>> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT 1 FROM messages WHERE provider_id = ?1
+             UNION ALL SELECT 1 FROM provider_tombstones WHERE provider_id = ?1
+             LIMIT 1",
+        )?;
+        let mut out = Vec::new();
+        for p in inbox {
+            if !st.exists([p])? {
+                out.push(*p);
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// Pre-query snapshot for [`Store::provider_reconcile`].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconcileSnapshot {
+    pub candidates: Vec<ProviderRef>,
+    pub tombstones: Vec<i64>,
 }
 
 /// Result of [`Store::provider_reconcile`].

@@ -23,8 +23,16 @@ fn quoted_after(src: &str, prefix: &str) -> BTreeSet<String> {
     out
 }
 
-/// `call('name'` / `call<T>('name'` in the UI's API adapter.
+/// `call('name'` / `call<T>('name'` in the UI's API adapter (app commands).
 fn ui_calls() -> BTreeSet<String> {
+    ui_calls_all()
+        .into_iter()
+        .filter(|n| !n.starts_with("plugin:"))
+        .collect()
+}
+
+/// Every `call(...)` literal, `plugin:` ones included.
+fn ui_calls_all() -> BTreeSet<String> {
     let mut used = BTreeSet::new();
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/api");
     for e in std::fs::read_dir(dir).unwrap() {
@@ -44,10 +52,7 @@ fn ui_calls() -> BTreeSet<String> {
             if let Some(after) = r.strip_prefix("('")
                 && let Some(end) = after.find('\'')
             {
-                let name = &after[..end];
-                if !name.starts_with("plugin:") {
-                    used.insert(name.to_string());
-                }
+                used.insert(after[..end].to_string());
             }
         }
     }
@@ -81,6 +86,8 @@ const NATIVE_ONLY: &[&str] = &[
     "provider_reconcile",
     "begin_send_attempt",
     "record_send_part",
+    "end_send_handoff",
+    "provider_missing",
 ];
 
 #[test]
@@ -132,4 +139,60 @@ fn webview_grants_only_commands_the_ui_calls() {
         .unwrap();
     assert!(!release_list.contains("ingest_incoming"));
     assert!(!release_list.contains("import_seed"));
+}
+
+/// UI calls the native webview is deliberately not granted: the browser
+/// backup path (ciphertext through JS), taken only when capabilities report
+/// `nativePicker: false`. The Tauri runtime always reports `true`
+/// (`platform_capabilities`), and the UI keeps the backup controls pending
+/// until capabilities load (R4 optional), so production never reaches them.
+const BROWSER_ONLY: &[&str] = &["backup_create", "backup_restore"];
+
+/// R4 optional (reverse direction): every command the production UI can
+/// invoke has a grant, so no reachable control fails with an ACL error.
+#[test]
+fn every_command_the_ui_calls_is_granted() {
+    let granted = quoted_after(&read("permissions/ui.toml"), "\"allow-");
+    for u in ui_calls() {
+        assert!(
+            granted.contains(&u) || BROWSER_ONLY.contains(&u.as_str()),
+            "the UI calls {u} but the webview is not granted it"
+        );
+    }
+    assert!(
+        read("src/core.rs").contains("native_picker: true,"),
+        "BROWSER_ONLY relies on the native runtime always reporting a picker"
+    );
+    let ui = read("../src/App.tsx");
+    assert!(
+        ui.contains("nativePicker={platform === 'pending' ? null : caps.nativePicker}"),
+        "backup controls must wait for capabilities"
+    );
+    // Plugin commands: exposed by the plugin manifest and in its default
+    // permission set, which the Android capability grants.
+    let plugin_cmds = quoted_after(
+        &read("../plugins/tauri-plugin-telephony/build.rs"),
+        "    \"",
+    );
+    let plugin_default = quoted_after(
+        &read("../plugins/tauri-plugin-telephony/permissions/default.toml"),
+        "\"allow-",
+    );
+    assert!(read("capabilities/mobile.json").contains("\"telephony:default\""));
+    let mut n = 0;
+    for c in ui_calls_all() {
+        let Some(cmd) = c.strip_prefix("plugin:telephony|") else {
+            continue;
+        };
+        n += 1;
+        assert!(
+            plugin_cmds.contains(cmd),
+            "plugin command {cmd} not exposed"
+        );
+        assert!(
+            plugin_default.contains(cmd),
+            "plugin command {cmd} not granted"
+        );
+    }
+    assert!(n >= 4, "plugin call parser");
 }

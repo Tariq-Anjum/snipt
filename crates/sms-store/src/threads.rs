@@ -222,6 +222,10 @@ pub(crate) fn query_rows(
 }
 
 /// Recompute one thread row from its messages (or delete it when empty).
+/// Deletes one message unless it has an open send hand-off (R4 #4).
+pub(crate) const DELETE_UNLESS_HANDOFF: &str = "DELETE FROM messages WHERE id = ?1
+     AND NOT EXISTS (SELECT 1 FROM send_attempts WHERE msg_id = ?1 AND handoff = 0)";
+
 pub(crate) fn recompute_thread(conn: &Connection, thread_id: i64) -> Result<()> {
     let mut stmt = conn.prepare_cached(
         "SELECT category, confidence, scores_json, reason FROM messages WHERE thread_id = ?1
@@ -509,6 +513,9 @@ impl Store {
     }
 
     /// Port of store.ts `deleteMessagesByIds`; returns the number deleted.
+    /// A message with an open send hand-off is kept (R4 #4: deleting it
+    /// would cascade the attempt away while the platform is still handing
+    /// it to the radio); callers report it as not deleted.
     pub fn delete_messages(&mut self, ids: &[i64]) -> Result<usize> {
         let tx = crate::write_tx(&mut self.conn)?;
         let mut touched = std::collections::BTreeSet::new();
@@ -519,12 +526,13 @@ impl Store {
                 .query_row([id], |r| r.get(0))
                 .optional()?;
             if let Some(t) = t {
-                deleted += tx
-                    .prepare_cached("DELETE FROM messages WHERE id = ?1")?
-                    .execute([id])?;
-                tx.prepare_cached("DELETE FROM reminders_done WHERE msg_id = ?1")?
-                    .execute([id])?;
-                touched.insert(t);
+                let n = tx.prepare_cached(DELETE_UNLESS_HANDOFF)?.execute([id])?;
+                if n > 0 {
+                    tx.prepare_cached("DELETE FROM reminders_done WHERE msg_id = ?1")?
+                        .execute([id])?;
+                    touched.insert(t);
+                }
+                deleted += n;
             }
         }
         for t in touched {

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sms_engine::{Analysis, budget::categorize_merchant_expense};
 use sms_types::{MessageProtocol, RawSms, js, time::is_valid_timestamp_ms};
 
-use crate::ids::{IdKind, allocate, note_used, valid_id};
+use crate::ids::{IdKind, MAX_EXTERNAL_ID, allocate, note_used, valid_id};
 use crate::{Result, Store, StoreError, threads::recompute_thread};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -148,7 +148,16 @@ pub(crate) fn insert_message(tx: &Transaction<'_>, sms: &RawSms, a: &Analysis) -
 impl Store {
     /// Classify and insert a batch in one transaction; threads touched are
     /// recomputed once each. Existing ids are skipped (idempotent re-import).
+    /// Explicit ids (dev seed, tests) must lie in `1..=MAX_EXTERNAL_ID`, so
+    /// they can never exhaust the allocator (R4 #2); a batch with any other
+    /// id changes nothing.
     pub fn ingest_batch(&mut self, messages: &[RawSms]) -> Result<IngestReport> {
+        if messages
+            .iter()
+            .any(|m| m.id > MAX_EXTERNAL_ID || m.thread_id > MAX_EXTERNAL_ID)
+        {
+            return Err(StoreError::Invalid("id above the external id range"));
+        }
         let tx = crate::write_tx(&mut self.conn)?;
         let mut report = IngestReport::default();
         let mut touched = BTreeSet::new();

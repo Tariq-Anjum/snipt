@@ -1,18 +1,31 @@
-//! Backup restore as one atomic merge (R2 #2).
+//! Backup restore as one atomic merge (R2 #2, R4 #1-#3).
 //!
 //! Rules:
 //! - Everything is validated before the first write: message / thread /
 //!   archived-thread / completed-reminder ids must be in `1..=MAX_ID`,
 //!   message ids unique within the archive, SIM slots 0/1, timestamps in the
 //!   JS `Date` range. A bad archive changes nothing.
-//! - A message counts as "already present" only when a stored row has the
-//!   same stable identity: sender (case-insensitive), timestamp, body and
-//!   direction. An id collision with a *different* message is not presence:
-//!   the incoming row gets a fresh id (monotonic allocator) and is kept.
-//! - Thread ids are mapped per incoming thread: kept when the local thread
-//!   with that id belongs to the same sender (or the id is unused), joined to
-//!   the sender's existing local thread otherwise, else given a fresh id.
-//!   Archived-thread and completed-reminder references follow the maps;
+//! - Presence is a multiset match against rows that existed *before* the
+//!   restore: an incoming message matches one not-yet-matched stored row
+//!   with the same identity (sender case-insensitive, timestamp, body,
+//!   direction, SIM slot, transport). Rows inserted by this restore are
+//!   never match candidates, so N identical archive rows against M stored
+//!   ones insert `max(0, N - M)`; rows differing only by SIM or transport
+//!   are distinct.
+//! - Thread mapping is derived from the matched rows: an incoming thread
+//!   whose matched messages live in exactly one local thread maps there; in
+//!   several local threads the archive is ambiguous and refused (nothing is
+//!   written). An incoming thread without matches keeps its id when the
+//!   local thread with that id has the same sender, otherwise joins the
+//!   sender's existing local thread, otherwise keeps its id when it is
+//!   free and keepable, else gets a fresh id.
+//! - An archive id is stored verbatim only when it is free locally and
+//!   keepable ([`crate::ids::keepable`]: at most `MAX_EXTERNAL_ID`, and not
+//!   below the allocator's high-water mark, i.e. never used or retired
+//!   locally). Everything else is remapped through the allocator, so an
+//!   archive can neither exhaust the id space nor bring back a retired id a
+//!   stale notification action or send callback still names.
+//! - Archived-thread and completed-reminder references follow the maps;
 //!   references to ids not in the archive are ignored.
 //! - All writes (messages, thread recompute, archive flags, blocked senders,
 //!   reminders, settings) commit in one `BEGIN IMMEDIATE` transaction.
@@ -26,7 +39,7 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use sms_types::{RawSms, time::is_valid_timestamp_ms};
 
-use crate::ids::{IdKind, allocate, valid_id};
+use crate::ids::{IdKind, allocate, keepable, stored_next, valid_id};
 use crate::ingest::{IngestReport, insert_message};
 use crate::threads::recompute_thread;
 use crate::{Result, Store, StoreError};
@@ -45,7 +58,8 @@ pub struct RestoreInput<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct RestoreOutcome {
     pub ingest: IngestReport,
-    /// Incoming messages stored under a new id (id collision, different message).
+    /// Incoming messages stored under a new id (id taken, retired locally
+    /// or outside the external id range).
     pub remapped_messages: usize,
     /// Incoming threads stored under another thread id.
     pub remapped_threads: usize,
@@ -102,14 +116,58 @@ fn fresh(tx: &Transaction<'_>, kind: IdKind, claimed: &HashSet<i64>) -> Result<i
     }
 }
 
+/// Transport as stored (`protocol`; NULL = SMS).
+fn transport(m: &RawSms) -> &'static str {
+    match m.protocol {
+        Some(sms_types::MessageProtocol::Rcs) => "RCS",
+        _ => "SMS",
+    }
+}
+
 impl Store {
     /// Merge a decoded backup into the store atomically (see module docs).
     pub fn restore_merge(&mut self, input: &RestoreInput<'_>) -> Result<RestoreOutcome> {
         validate(input)?;
         let tx = crate::write_tx(&mut self.conn)?;
         let mut out = RestoreOutcome::default();
+        let msg_next0 = stored_next(&tx, IdKind::Message)?;
+        let thread_next0 = stored_next(&tx, IdKind::Thread)?;
 
-        // ---- thread map ------------------------------------------------
+        // ---- presence: multiset match against pre-existing rows ----------
+        // Nothing is inserted in this phase, so only rows that existed
+        // before the restore can match.
+        let mut consumed: HashSet<i64> = HashSet::new();
+        let mut msg_map: HashMap<i64, i64> = HashMap::new();
+        let mut matched_threads: HashMap<i64, BTreeSet<i64>> = HashMap::new();
+        for m in input.messages {
+            let cands: Vec<(i64, i64)> = tx
+                .prepare_cached(
+                    "SELECT id, thread_id FROM messages
+                     WHERE sender_lc = ?1 AND ts_ms = ?2 AND body = ?3 AND is_outgoing = ?4
+                       AND sim_slot = ?5 AND COALESCE(protocol, 'SMS') = ?6
+                     ORDER BY id",
+                )?
+                .query_map(
+                    params![
+                        m.sender.to_lowercase(),
+                        m.timestamp_ms,
+                        m.body,
+                        m.is_outgoing,
+                        m.sim_slot,
+                        transport(m)
+                    ],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?
+                .collect::<rusqlite::Result<_>>()?;
+            if let Some((id, t)) = cands.into_iter().find(|(id, _)| !consumed.contains(id)) {
+                consumed.insert(id);
+                msg_map.insert(m.id, id);
+                matched_threads.entry(m.thread_id).or_default().insert(t);
+                out.ingest.skipped_existing += 1;
+            }
+        }
+
+        // ---- thread map --------------------------------------------------
         let mut owner: Vec<(i64, String)> = Vec::new();
         {
             let mut seen = HashSet::new();
@@ -120,41 +178,54 @@ impl Store {
             }
         }
         let mut thread_map: HashMap<i64, i64> = HashMap::new();
-        // Incoming ids that are free locally are reserved up front, so a
-        // fresh id handed to a colliding row never takes one of them (no
-        // cascading remaps).
+        // Incoming ids kept verbatim are reserved up front, so a fresh id
+        // handed to a remapped thread never takes one of them.
         let mut claimed_threads: HashSet<i64> = HashSet::new();
         for (t, _) in &owner {
-            if !row_exists(
-                &tx,
-                "SELECT 1 FROM messages WHERE thread_id = ?1 LIMIT 1",
-                *t,
-            )? {
+            if keepable(*t, thread_next0)
+                && !row_exists(
+                    &tx,
+                    "SELECT 1 FROM messages WHERE thread_id = ?1 LIMIT 1",
+                    *t,
+                )?
+            {
                 claimed_threads.insert(*t);
             }
         }
         let mut targets: HashSet<i64> = HashSet::new();
         for (t, sender_lc) in &owner {
-            let local_owner: Option<String> = tx
-                .prepare_cached(
-                    "SELECT sender_lc FROM messages WHERE thread_id = ?1 ORDER BY ins_seq LIMIT 1",
-                )?
-                .query_row([t], |r| r.get(0))
-                .optional()?;
-            let target = if local_owner.as_deref() == Some(sender_lc.as_str()) {
-                *t
-            } else if let Some(u) = tx
-                .prepare_cached(
-                    "SELECT thread_id FROM messages WHERE sender_lc = ?1 ORDER BY ins_seq LIMIT 1",
-                )?
-                .query_row([sender_lc], |r| r.get::<_, i64>(0))
-                .optional()?
-            {
-                u
-            } else if local_owner.is_none() && !targets.contains(t) {
-                *t
+            let target = if let Some(local) = matched_threads.get(t) {
+                if local.len() > 1 {
+                    return Err(StoreError::Invalid(
+                        "archive thread matches messages in several local threads",
+                    ));
+                }
+                *local.iter().next().expect("non-empty")
             } else {
-                fresh(&tx, IdKind::Thread, &claimed_threads)?
+                let local_owner: Option<String> = tx
+                    .prepare_cached(
+                        "SELECT sender_lc FROM messages WHERE thread_id = ?1 ORDER BY ins_seq LIMIT 1",
+                    )?
+                    .query_row([t], |r| r.get(0))
+                    .optional()?;
+                if local_owner.as_deref() == Some(sender_lc.as_str()) {
+                    *t
+                } else if let Some(u) = tx
+                    .prepare_cached(
+                        "SELECT thread_id FROM messages WHERE sender_lc = ?1 ORDER BY ins_seq LIMIT 1",
+                    )?
+                    .query_row([sender_lc], |r| r.get::<_, i64>(0))
+                    .optional()?
+                {
+                    u
+                } else if local_owner.is_none()
+                    && !targets.contains(t)
+                    && claimed_threads.contains(t)
+                {
+                    *t
+                } else {
+                    fresh(&tx, IdKind::Thread, &claimed_threads)?
+                }
             };
             if target != *t {
                 out.remapped_threads += 1;
@@ -165,47 +236,26 @@ impl Store {
         }
 
         // ---- messages ----------------------------------------------------
-        let mut msg_map: HashMap<i64, i64> = HashMap::new();
         let mut claimed_msgs: HashSet<i64> = HashSet::new();
         for m in input.messages {
-            if !row_exists(&tx, "SELECT 1 FROM messages WHERE id = ?1", m.id)? {
+            if !msg_map.contains_key(&m.id)
+                && keepable(m.id, msg_next0)
+                && !row_exists(&tx, "SELECT 1 FROM messages WHERE id = ?1", m.id)?
+            {
                 claimed_msgs.insert(m.id);
             }
         }
-        let mut used: HashSet<i64> = HashSet::new();
         let mut touched = BTreeSet::new();
         for m in input.messages {
-            let same: Option<i64> = tx
-                .prepare_cached(
-                    "SELECT id FROM messages
-                     WHERE sender_lc = ?1 AND ts_ms = ?2 AND body = ?3 AND is_outgoing = ?4
-                     ORDER BY id LIMIT 1",
-                )?
-                .query_row(
-                    params![
-                        m.sender.to_lowercase(),
-                        m.timestamp_ms,
-                        m.body,
-                        m.is_outgoing
-                    ],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            if let Some(existing) = same {
-                msg_map.insert(m.id, existing);
-                out.ingest.skipped_existing += 1;
+            if msg_map.contains_key(&m.id) {
                 continue;
             }
-            let id = if !used.contains(&m.id)
-                && !row_exists(&tx, "SELECT 1 FROM messages WHERE id = ?1", m.id)?
-            {
+            let id = if claimed_msgs.contains(&m.id) {
                 m.id
             } else {
                 out.remapped_messages += 1;
                 fresh(&tx, IdKind::Message, &claimed_msgs)?
             };
-            claimed_msgs.insert(id);
-            used.insert(id);
             let thread_id = thread_map[&m.thread_id];
             let sms = RawSms {
                 id,

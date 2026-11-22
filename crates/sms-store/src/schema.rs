@@ -180,3 +180,33 @@ CREATE TABLE mms_pending (
     msg_id INTEGER
 );
 "#;
+
+/// Schema v4 (R4 review):
+/// - `send_attempts.handoff`: 0 while the platform is handing an attempt to
+///   the radio (between `begin_send_attempt` and `end_send_handoff`). A
+///   message with an open hand-off cannot be deleted, so a delete can no
+///   longer cascade the attempt away mid hand-off. Existing attempts are
+///   finished (1).
+/// - [`repair_v4`]: legacy in-flight sends become `indeterminate`, id
+///   high-water marks are seeded and saturated ids renumbered.
+pub const SCHEMA_V4: &str = r#"
+ALTER TABLE send_attempts ADD COLUMN handoff INTEGER NOT NULL DEFAULT 1;
+"#;
+
+/// Data part of the v4 migration (inside the migration transaction):
+/// - a `sending` row with no send attempt was in flight under v1, whose
+///   callbacks carried no attempt id and are now ignored: it moves to the
+///   explicit `indeterminate` state (never resent);
+/// - message and thread id marks are seeded from the stored maxima and
+///   saturated ids renumbered ([`crate::ids::repair_for_v4`]).
+pub(crate) fn repair_v4(tx: &rusqlite::Transaction<'_>) -> Result<(), crate::StoreError> {
+    tx.execute_batch(
+        "UPDATE messages SET send_status = 'indeterminate'
+         WHERE is_outgoing = 1 AND send_status = 'sending'
+           AND NOT EXISTS (SELECT 1 FROM send_attempts a WHERE a.msg_id = messages.id);
+         PRAGMA defer_foreign_keys = ON;",
+    )?;
+    crate::ids::repair_for_v4(tx, crate::ids::IdKind::Message)?;
+    crate::ids::repair_for_v4(tx, crate::ids::IdKind::Thread)?;
+    Ok(())
+}

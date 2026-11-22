@@ -75,6 +75,9 @@ impl AppState {
             return Ok(s.clone());
         }
         let opened = Self::open(db_path)?;
+        // First open in this process: no send hand-off can be running yet,
+        // so any open one was interrupted by process death (R4 #4).
+        opened.with_core(|c| Ok(c.store.recover_interrupted_handoffs()?))?;
         Ok(SHARED.get_or_init(|| opened).clone())
     }
 
@@ -699,6 +702,27 @@ impl Core {
         Ok(self.store.begin_send_attempt(sms_id, parts, now_ms())?)
     }
 
+    /// Close a send hand-off (see [`Store::end_send_handoff`]).
+    pub fn end_send_handoff(
+        &mut self,
+        attempt_id: i64,
+        handed_off: bool,
+    ) -> CmdResult<Option<SendUpdate>> {
+        Ok(self.store.end_send_handoff(attempt_id, handed_off)?)
+    }
+
+    /// Of `ids`, those still stored (a delete kept them).
+    pub fn existing(&self, ids: &[i64]) -> CmdResult<Vec<i64>> {
+        check_ids(ids)?;
+        let mut out = Vec::new();
+        for id in ids {
+            if self.store.message(*id)?.is_some() {
+                out.push(*id);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn bind_send_provider(&mut self, attempt_id: i64, provider_id: i64) -> CmdResult<bool> {
         Ok(self.store.bind_send_provider(attempt_id, provider_id)?)
     }
@@ -760,10 +784,19 @@ impl Core {
         Ok(self.store.provider_delete(provider_ids)?)
     }
 
-    /// Local `(id, providerId)` candidates; captured before the provider
-    /// query of a reconcile pass (Android, on start/resume).
-    pub fn provider_candidates(&self) -> CmdResult<Vec<ProviderRef>> {
-        Ok(self.store.provider_candidates()?)
+    /// Local `(id, providerId)` candidates and tombstones; captured before
+    /// the provider query of a reconcile pass (Android, on start/resume).
+    pub fn provider_snapshot(&self) -> CmdResult<sms_store::ReconcileSnapshot> {
+        Ok(self.store.provider_snapshot()?)
+    }
+
+    /// Explicit "import missing messages": provider inbox ids the store
+    /// neither holds nor deleted locally (see [`Store::provider_missing`]).
+    pub fn provider_missing(&self, inbox: &[i64]) -> CmdResult<Vec<i64>> {
+        if inbox.len() > 10 * MAX_IDS {
+            return Err(CmdError::invalid("too many ids"));
+        }
+        Ok(self.store.provider_missing(inbox)?)
     }
 
     /// Provider -> store sync against the pre-query candidate set (see
@@ -773,11 +806,13 @@ impl Core {
     pub fn provider_reconcile(
         &mut self,
         candidates: &[ProviderRef],
+        tombstones: &[i64],
         present: &[i64],
         read: &[i64],
         inbox: &[i64],
     ) -> CmdResult<ReconcileReport> {
         if candidates.len() > 10 * MAX_IDS
+            || tombstones.len() > 10 * MAX_IDS
             || present.len() > 10 * MAX_IDS
             || read.len() > 10 * MAX_IDS
             || inbox.len() > 10 * MAX_IDS
@@ -786,7 +821,7 @@ impl Core {
         }
         let r = self
             .store
-            .provider_reconcile(candidates, present, read, inbox)?;
+            .provider_reconcile(candidates, tombstones, present, read, inbox)?;
         Ok(ReconcileReport {
             deleted: r.deleted,
             marked_read: r.marked_read,

@@ -30,8 +30,8 @@ pub use mms::{
     AttachmentIn, AttachmentMeta, FailOutcome, MmsNotice, NoticeAction, PendingMms, StoredImage,
 };
 pub use platform::{
-    FilterCounts, InboxCounts, OutgoingSms, PartKind, PartOutcome, ProviderRef, Reconciled,
-    SendStatus, SendUpdate,
+    FilterCounts, InboxCounts, OutgoingSms, PartKind, PartOutcome, ProviderRef, ReconcileSnapshot,
+    Reconciled, SendStatus, SendUpdate,
 };
 pub use query::MessageCursor;
 pub use restore::{RestoreInput, RestoreOutcome};

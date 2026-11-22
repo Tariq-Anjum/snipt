@@ -38,9 +38,12 @@ fn notice(tid: &str) -> MmsNotice {
 }
 
 #[test]
-fn migrates_to_v3() {
+fn migrates_to_latest() {
     let s = Store::open_in_memory(common::TZ).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 3);
+    assert_eq!(
+        s.schema_version().unwrap(),
+        sms_store::migrate::LATEST_VERSION
+    );
 }
 
 #[test]
@@ -58,7 +61,10 @@ fn v2_database_upgrades_in_place() {
         tx.commit().unwrap();
     }
     let mut s = Store::open(&path, common::TZ).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 3);
+    assert_eq!(
+        s.schema_version().unwrap(),
+        sms_store::migrate::LATEST_VERSION
+    );
     let (m, ins) = s
         .ingest_from_provider(&incoming("+1555", "hello"), Some(7), NOW)
         .unwrap();

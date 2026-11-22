@@ -435,21 +435,28 @@ fn provider_reconcile_deletes_missing_and_marks_read() {
         );
     }
     let before = c.store().message_count().unwrap();
-    let cands = c.provider_candidates().unwrap();
+    let snap = c.provider_snapshot().unwrap();
+    let (cands, tombs) = (snap.candidates, snap.tombstones);
     // a failed/empty provider snapshot must not wipe stored provider rows
-    assert!(c.provider_reconcile(&cands, &[], &[], &[]).is_err());
+    assert!(c.provider_reconcile(&cands, &tombs, &[], &[], &[]).is_err());
     assert_eq!(c.store().message_count().unwrap(), before);
     // 502 deleted elsewhere, 503 read elsewhere
     let rep = c
-        .provider_reconcile(&cands, &[501, 503], &[503], &[501, 503])
+        .provider_reconcile(&cands, &tombs, &[501, 503], &[503], &[501, 503])
         .unwrap();
     assert_eq!((rep.deleted, rep.marked_read), (1, 1));
     assert!(rep.missing.is_empty());
     assert_eq!(c.store().message_count().unwrap(), before - 1);
     // idempotent
-    let cands = c.provider_candidates().unwrap();
+    let snap = c.provider_snapshot().unwrap();
     let again = c
-        .provider_reconcile(&cands, &[501, 503], &[503], &[501, 503])
+        .provider_reconcile(
+            &snap.candidates,
+            &snap.tombstones,
+            &[501, 503],
+            &[503],
+            &[501, 503],
+        )
         .unwrap();
     assert_eq!((again.deleted, again.marked_read), (0, 0));
 }

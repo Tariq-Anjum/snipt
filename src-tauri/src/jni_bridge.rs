@@ -126,6 +126,11 @@ struct IngestIn {
     message: IncomingSms,
     #[serde(default)]
     provider_id: Option<i64>,
+    /// Provider READ flag of a replayed / imported row: a newly stored
+    /// message is marked read at once instead of showing unread until the
+    /// next reconcile.
+    #[serde(default)]
+    read: bool,
 }
 
 /// What the receiver needs to post a notification. `body` is redacted (the
@@ -147,7 +152,13 @@ struct IngestOut {
 }
 
 fn ingest_one(input: &IngestIn) -> CmdResult<IngestOut> {
-    let r = state()?.with_core(|c| c.ingest_incoming(&input.message, input.provider_id))?;
+    let r = state()?.with_core(|c| {
+        let r = c.ingest_incoming(&input.message, input.provider_id)?;
+        if r.inserted && input.read {
+            c.mark_read(r.notification.message.sms.id)?;
+        }
+        Ok(r)
+    })?;
     Ok(ingest_out(r))
 }
 
@@ -374,6 +385,25 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_sendPartResult<'l>(
     })
 }
 
+/// `endSend(attemptId, handedOff) -> SendUpdate JSON | null`: closes the
+/// attempt's hand-off (the message is deletable again); `handedOff=false`
+/// (binding refused, radio rejected) marks it `failed`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_endSend<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    attempt_id: jlong,
+    handed_off: jboolean,
+) -> jstring {
+    json_call(&mut env, |_| {
+        let u = state()?
+            .with_core(|c| c.end_send_handoff(attempt_id, handed_off != 0))?
+            .ok_or_else(|| CmdError::invalid("attempt"))?;
+        emit_send(&u);
+        Ok(u)
+    })
+}
+
 /// `failSend(id) -> SendUpdate JSON | null`: hand-off failed before or
 /// without callbacks (monotonic; a delivered message stays delivered).
 #[unsafe(no_mangle)]
@@ -464,6 +494,10 @@ struct ReconcileIn {
     /// `(storeId, providerId)` pairs captured by `reconcileBegin` *before*
     /// the provider was queried.
     candidates: Vec<sms_store::ProviderRef>,
+    /// Tombstones from the same snapshot; only these may be pruned. Absent
+    /// = prune nothing.
+    #[serde(default)]
+    tombstones: Vec<i64>,
     present: Vec<i64>,
     read: Vec<i64>,
     /// Provider inbox ids (subset of `present`) for the missed-row replay.
@@ -471,16 +505,14 @@ struct ReconcileIn {
     inbox: Vec<i64>,
 }
 
-/// `reconcileBegin() -> [{id, providerId}] | null`: the local candidate set,
-/// captured before the provider query.
+/// `reconcileBegin() -> {candidates: [{id, providerId}], tombstones: [id]} |
+/// null`: the local snapshot, captured before the provider query.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_app_snipt_telephony_NativeCore_reconcileBegin<'l>(
     mut env: JNIEnv<'l>,
     _class: JClass<'l>,
 ) -> jstring {
-    json_call(&mut env, |_| {
-        state()?.with_core(|c| c.provider_candidates())
-    })
+    json_call(&mut env, |_| state()?.with_core(|c| c.provider_snapshot()))
 }
 
 /// `reconcile({candidates, present, read, inbox}) -> {deleted, markedRead,
@@ -496,12 +528,34 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_reconcile<'l>(
         let input: ReconcileIn = serde_json::from_str(&jstr(env, &json)?)
             .map_err(|_| CmdError::invalid("reconcile json"))?;
         let rep = state()?.with_core(|c| {
-            c.provider_reconcile(&input.candidates, &input.present, &input.read, &input.inbox)
+            c.provider_reconcile(
+                &input.candidates,
+                &input.tombstones,
+                &input.present,
+                &input.read,
+                &input.inbox,
+            )
         })?;
         if rep.deleted + rep.marked_read > 0 {
             emit("sms-changed", serde_json::json!({}));
         }
         Ok(rep)
+    })
+}
+
+/// `providerMissing([providerId]) -> [providerId] | null`: of the given
+/// provider inbox ids, those the store neither holds nor deleted locally
+/// (explicit "import missing messages"; ignores the v1 replay floor).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_providerMissing<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    json: JString<'l>,
+) -> jstring {
+    json_call(&mut env, |env| {
+        let ids: Vec<i64> =
+            serde_json::from_str(&jstr(env, &json)?).map_err(|_| CmdError::invalid("ids json"))?;
+        state()?.with_core(|c| c.provider_missing(&ids))
     })
 }
 

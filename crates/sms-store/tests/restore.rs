@@ -136,9 +136,18 @@ fn same_message_counts_as_present_under_any_id() {
         },
         raw(local.id + 500, 900, "+15550001", "local message", NOW),
     ];
+    // R4 #1: presence is a multiset match. Two identical archive rows
+    // against one stored row: one matches, the other is a distinct message.
     let o = s.restore_merge(&input(&same, &[], &[], &[])).unwrap();
-    assert_eq!((o.ingest.inserted, o.ingest.skipped_existing), (0, 2));
-    assert_eq!(s.message_count().unwrap(), 1);
+    assert_eq!((o.ingest.inserted, o.ingest.skipped_existing), (1, 1));
+    assert_eq!(s.message_count().unwrap(), 2);
+    // Re-restoring is idempotent: both now match.
+    let again = s.restore_merge(&input(&same, &[], &[], &[])).unwrap();
+    assert_eq!(
+        (again.ingest.inserted, again.ingest.skipped_existing),
+        (0, 2)
+    );
+    assert_eq!(s.message_count().unwrap(), 2);
 }
 
 #[test]

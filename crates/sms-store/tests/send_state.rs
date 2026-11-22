@@ -2,7 +2,7 @@
 //! a once-bound provider id, per-part results are persisted and the send
 //! state only moves forward; R2 #4 / R3 #2 reconciliation race.
 
-use sms_store::ids::MAX_ID;
+use sms_store::ids::{MAX_EXTERNAL_ID, MAX_ID};
 use sms_store::{IncomingSms, OutgoingSms, PartKind, PartOutcome, ProviderRef, SendStatus, Store};
 use sms_types::RawSms;
 
@@ -101,10 +101,16 @@ fn ids_outside_js_safe_range_are_rejected_and_never_allocate_as_real() {
         assert!(s.ingest_batch(&[raw(id, t)]).is_err(), "id {id} thread {t}");
     }
     assert_eq!(s.message_count().unwrap(), 0);
-    // The largest accepted id is stored; allocation past it fails cleanly
-    // instead of producing a REAL id.
-    s.ingest_batch(&[raw(MAX_ID, MAX_ID)]).unwrap();
-    assert!(s.ingest_incoming(&incoming("+1777", "z"), NOW).is_err());
+    // R4 #2: an explicit id the allocator could never continue from is
+    // refused; the largest external id is stored and allocation continues.
+    assert!(s.ingest_batch(&[raw(MAX_ID, 1)]).is_err());
+    assert!(s.ingest_batch(&[raw(5, MAX_ID)]).is_err());
+    assert!(s.ingest_batch(&[raw(MAX_EXTERNAL_ID + 1, 1)]).is_err());
+    assert_eq!(s.message_count().unwrap(), 0);
+    s.ingest_batch(&[raw(MAX_EXTERNAL_ID, MAX_EXTERNAL_ID)])
+        .unwrap();
+    let next = s.ingest_incoming(&incoming("+1777", "z"), NOW).unwrap();
+    assert!(next.id > MAX_EXTERNAL_ID && next.thread_id > MAX_EXTERNAL_ID);
     let typ: String = s
         .connection()
         .query_row("SELECT typeof(MAX(id)) FROM messages", [], |r| r.get(0))
@@ -249,7 +255,10 @@ fn provider_binding_is_set_once_and_attempt_ids_are_unique() {
     assert!(!s.bind_send_provider(a2, 10).unwrap());
     assert!(s.provider_refs(&[m2.id]).unwrap().is_empty());
     // Deleting the message (cascade) never frees its attempt id for reuse.
-    s.delete_messages(&[m.id, m2.id]).unwrap();
+    // (R4 #4: only after the hand-offs are closed.)
+    s.end_send_handoff(a, true).unwrap();
+    s.end_send_handoff(a2, false).unwrap();
+    assert_eq!(s.delete_messages(&[m.id, m2.id]).unwrap(), 2);
     let m3 = s.queue_outgoing(&to("+15550003"), NOW).unwrap();
     let a3 = s.begin_send_attempt(m3.id, 1, NOW).unwrap();
     assert!(a3 > a2);
@@ -310,7 +319,7 @@ fn reconcile_never_deletes_a_message_received_after_the_candidate_snapshot() {
         .ingest_from_provider(&incoming("+1555", "three"), Some(3), NOW)
         .unwrap();
     let r = s
-        .provider_reconcile(&candidates, &present, &[], &[1])
+        .provider_reconcile(&candidates, &[], &present, &[], &[1])
         .unwrap();
     assert_eq!(r.deleted, 1);
     assert!(
@@ -323,10 +332,15 @@ fn reconcile_never_deletes_a_message_received_after_the_candidate_snapshot() {
         id: late.id,
         provider_id: 999,
     }];
-    let r = s.provider_reconcile(&stale, &[1, 3], &[], &[]).unwrap();
+    let r = s
+        .provider_reconcile(&stale, &[], &[1, 3], &[], &[])
+        .unwrap();
     assert_eq!(r.deleted, 0);
     // Empty provider snapshot with candidates is refused.
-    assert!(s.provider_reconcile(&candidates, &[], &[], &[]).is_err());
+    assert!(
+        s.provider_reconcile(&candidates, &[], &[], &[], &[])
+            .is_err()
+    );
 }
 
 #[test]
@@ -339,10 +353,11 @@ fn reconcile_reports_missed_receipts_but_not_local_deletions() {
         .ingest_from_provider(&incoming("+1555", "purged"), Some(6), NOW)
         .unwrap();
     s.delete_messages(&[b.id]).unwrap(); // local delete (e.g. cleanup)
-    let c = s.provider_candidates().unwrap();
+    let snap = s.provider_snapshot().unwrap();
+    let c = snap.candidates.clone();
     // provider still has 5, 6 and a row 7 whose ingest was lost
     let r = s
-        .provider_reconcile(&c, &[5, 6, 7], &[5], &[5, 6, 7])
+        .provider_reconcile(&c, &snap.tombstones, &[5, 6, 7], &[5], &[5, 6, 7])
         .unwrap();
     assert_eq!(r.missing, vec![7]);
     assert_eq!(r.marked_read, 1);
@@ -352,13 +367,16 @@ fn reconcile_reports_missed_receipts_but_not_local_deletions() {
         .ingest_from_provider(&incoming("+1555", "late"), Some(7), NOW)
         .unwrap();
     assert!(inserted);
-    let c = s.provider_candidates().unwrap();
+    let snap = s.provider_snapshot().unwrap();
+    let c = snap.candidates.clone();
     let r = s
-        .provider_reconcile(&c, &[5, 6, 7], &[], &[5, 6, 7])
+        .provider_reconcile(&c, &snap.tombstones, &[5, 6, 7], &[], &[5, 6, 7])
         .unwrap();
     assert!(r.missing.is_empty());
     // Once row 6 is gone from the provider too, its tombstone is dropped.
-    let r = s.provider_reconcile(&c, &[5, 7], &[], &[5, 7]).unwrap();
+    let r = s
+        .provider_reconcile(&c, &snap.tombstones, &[5, 7], &[], &[5, 7])
+        .unwrap();
     assert_eq!(r.deleted, 0);
     let n: i64 = s
         .connection()
