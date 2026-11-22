@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Snipt
+GenericName=SMS Organizer
+Comment=Snip the noise: private SMS inbox, OTPs and spending in one place
+Exec=snipt
+Icon=app.snipt.sms
+Terminal=false
+Categories=Utility;Office;
+Keywords=sms;otp;messages;finance;
+StartupWMClass=snipt

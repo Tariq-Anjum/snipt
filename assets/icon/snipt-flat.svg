@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <title>Snipt (flat)</title>
+  <defs>
+    <clipPath id="clipTop"><path d="M0 0H64V22.4L0 41.6Z" transform="scale(16)"/></clipPath>
+    <clipPath id="clipBot"><path d="M0 41.6L64 22.4V64H0Z" transform="scale(16)"/></clipPath>
+    <g id="art" transform="scale(16)">
+      <path d="M17 26C17 20.4772 21.4772 16 27 16H37C42.5228 16 47 20.4772 47 26V33C47 38.5228 42.5228 43 37 43H28.5L20.8 48.2C19.6 49 18 48.14 18 46.7V41.5C17.36 39.88 17 38.04 17 36V26Z" fill="#FFFFFF"/>
+      <rect x="24" y="23.8" width="16" height="3.2" rx="1.6" fill="#1D4ED8"/>
+      <rect x="24" y="36.2" width="10.5" height="3.2" rx="1.6" fill="#3B82F6"/>
+    </g>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="256" fill="#2563EB"/>
+  <g clip-path="url(#clipTop)"><use href="#art"/></g>
+  <g clip-path="url(#clipBot)"><use href="#art" transform="translate(22 30)"/></g>
+</svg>

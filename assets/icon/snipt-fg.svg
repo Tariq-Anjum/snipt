@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <title>Snipt (adaptive foreground, monochrome)</title>
+  <!-- Content kept inside the 66dp safe zone (626px circle of 1024). Single colour; transparent elsewhere. -->
+  <defs>
+    <clipPath id="clipTop"><path d="M0 0H64V22.4L0 41.6Z"/></clipPath>
+    <clipPath id="clipBot"><path d="M0 41.6L64 22.4V64H0Z"/></clipPath>
+    <g id="art">
+      <path d="M17 26C17 20.4772 21.4772 16 27 16H37C42.5228 16 47 20.4772 47 26V33C47 38.5228 42.5228 43 37 43H28.5L20.8 48.2C19.6 49 18 48.14 18 46.7V41.5C17.36 39.88 17 38.04 17 36V26Z" fill="#FFFFFF"/>
+    </g>
+  </defs>
+  <g transform="translate(512 512) scale(16) translate(-32 -33)">
+    <g clip-path="url(#clipTop)"><use href="#art"/></g>
+    <g clip-path="url(#clipBot)"><use href="#art" transform="translate(1.4 1.9)"/></g>
+  </g>
+</svg>
