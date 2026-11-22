@@ -84,10 +84,11 @@ Parity hazards (must be covered by fixture tests):
   - `threads(thread_id PK, latest_ts, latest_msg_id, sender, display_name, sender_kind_json, category, confidence, unread, has_starred, is_archived, is_blocked, sim_slot, is_rcs)` — maintained incrementally on ingest/delete/read (thread consensus recomputed for the touched thread only).
   - `transactions(msg_id PK, ts_ms, amount, direction, method, last4, merchant, ref_id, balance, budget_category)`; `reminders_done(msg_id PK)`; `blocked_senders(sender PK)`; `settings(key PK, json)`; `meta(key PK, value)` (provider sync high-water marks, last weekly scan).
   - `messages_fts USING fts5(body, sender, contact_name, content='messages', content_rowid='id', tokenize='trigram')` + triggers. [R] trigram because TS search is token-AND **substring** matching (`haystack.includes(tok)`, store.ts); tokens <3 chars fall back to `LIKE` on `threads`.
+- Schema v2 (R2/R3 review): `id_alloc` (persistent message/thread id high-water marks; ids never reused, bounded to 1..=2^53-1), `send_attempts` + `send_part_results` (per-attempt provider binding, persisted per-part results, monotonic send state), `provider_tombstones` + `meta.provider_replay_floor` (reconcile replay). Restore = `Store::restore_merge` (validated, atomic, identity-based dedup, id remapping).
 - Paging: keyset cursors `(latest_ts, thread_id)` for thread list and `(ts_ms, id)` for messages; page size 50; never `OFFSET`.
 - Capacity target: 10,000 seed messages ingest+classify ≤ 2 s on x86_64 debug-free release build; thread page query ≤ 5 ms; FTS query ≤ 20 ms [R targets, measured in S6].
 - [I] 10k × ~150 B bodies ≈ 1.5 MB text; trigram index adds a few MB — acceptable.
-- Android DB: app-private `filesDir` (sandboxed); `android:allowBackup="false"` + data-extraction rules excluding everything (the encrypted `.mysms.enc` is the only backup path). Linux DB: `$XDG_DATA_HOME/<identifier>/mysms.db`, mode 0600. [U] At-rest DB encryption (SQLCipher) deferred: adds OpenSSL/licence surface; owner decision.
+- Android DB: app-private `filesDir` (sandboxed); `android:allowBackup="false"` + data-extraction rules excluding everything (the encrypted `.mysms.enc` is the only backup path). Linux DB: `$XDG_DATA_HOME/<identifier>/snipt.db`, mode 0600 (created/tightened before SQLite opens it, so `-wal`/`-shm` inherit 0600; app dir 0700; `sms_store::fsperm`). [U] At-rest DB encryption (SQLCipher) deferred: adds OpenSSL/licence surface; owner decision.
 
 ## 5. Crypto and backup compatibility (sms-crypto)
 

@@ -57,3 +57,29 @@ deterministic). Rust is kept equal to TS; deviations are listed here.
   scan, so no false negatives either (test `search_tokens_fts_cannot_represent`). Cost: such
   tokens scan the whole history instead of the index.
 - OTP/reminder list ordering among equal timestamps follows thread list order, then `ins_seq`.
+
+## Intentional safety deviations (R2/R3 review, 2026-11-22)
+None of these touch `sms-engine` or the fixtures; the TS oracle is unchanged
+(`TZ=Asia/Kolkata npx tsx --test src/engine/engine.test.ts`).
+- **Ids are never reused.** store.ts allocates `max(id)+1` / `max(threadId)+1`
+  (a deleted newest id comes back). sms-store keeps persistent high-water marks
+  (`id_alloc`, schema v2), so a stale notification action, send callback or UI
+  reference can never address a newer message or thread. First ids are still
+  1001 / 101, so a fresh store allocates exactly like store.ts until something
+  is deleted.
+- **Id range.** Message/thread ids must be in `1..=2^53-1` (JS safe integers:
+  the UI and `.mysms.enc` carry them as JS numbers). Out-of-range ids are
+  rejected on insert and restore; TS accepts any number. Allocation past the
+  bound fails instead of producing a SQLite REAL.
+- **Restore merge.** The TS dev path replaces its in-memory state. Rust merges
+  atomically: an incoming message is "already present" only when sender
+  (case-insensitive), timestamp, body and direction match a stored row; an id
+  collision with a different message is kept under a fresh id, and thread /
+  archived / reminder references follow the remap. Restoring into an empty
+  store keeps every id, so TS-written archives restore identically (fixture
+  test `ts_written_backup_restores_through_core_and_is_idempotent`).
+- **OTP masking at the IPC edge.** `messages_page` bodies/`otp.code` and weekly
+  scan sample bodies are masked by the Tauri core after the engine ran; the
+  scan buckets, ids and byte estimates are the engine's (TS-equal) output.
+- **Send state** (`queued < sending < sent < unconfirmed < delivered`,
+  `failed`) has no TS counterpart; store.ts outgoing rows have no status.
