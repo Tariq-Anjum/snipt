@@ -103,6 +103,17 @@ pub struct ImportResult {
     pub skipped: i64,
 }
 
+/// Draft handed over by another app (SENDTO sms:/smsto:, SEND text/plain).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Compose {
+    pub present: bool,
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub body: String,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Done {

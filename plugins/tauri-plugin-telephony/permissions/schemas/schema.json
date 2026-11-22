@@ -367,10 +367,22 @@
           "markdownDescription": "Denies the status command without any pre-configured scope."
         },
         {
-          "description": "Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost and first-run provider import.\n#### This default permission set includes:\n\n- `allow-request-default-sms-role`\n- `allow-status`\n- `allow-copy-sensitive`\n- `allow-set-secure`\n- `allow-display-boost`\n- `allow-import-inbox`",
+          "description": "Enables the take_compose command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-take-compose",
+          "markdownDescription": "Enables the take_compose command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the take_compose command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-take-compose",
+          "markdownDescription": "Denies the take_compose command without any pre-configured scope."
+        },
+        {
+          "description": "Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, first-run provider import and the SENDTO draft hand-off.\n#### This default permission set includes:\n\n- `allow-request-default-sms-role`\n- `allow-status`\n- `allow-copy-sensitive`\n- `allow-set-secure`\n- `allow-display-boost`\n- `allow-import-inbox`\n- `allow-take-compose`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost and first-run provider import.\n#### This default permission set includes:\n\n- `allow-request-default-sms-role`\n- `allow-status`\n- `allow-copy-sensitive`\n- `allow-set-secure`\n- `allow-display-boost`\n- `allow-import-inbox`"
+          "markdownDescription": "Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, first-run provider import and the SENDTO draft hand-off.\n#### This default permission set includes:\n\n- `allow-request-default-sms-role`\n- `allow-status`\n- `allow-copy-sensitive`\n- `allow-set-secure`\n- `allow-display-boost`\n- `allow-import-inbox`\n- `allow-take-compose`"
         }
       ]
     }

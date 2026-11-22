@@ -47,6 +47,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::set_secure,
             commands::display_boost,
             commands::import_inbox,
+            commands::take_compose,
         ])
         .setup(|app, api| {
             #[cfg(target_os = "android")]

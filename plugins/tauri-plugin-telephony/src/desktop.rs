@@ -63,4 +63,8 @@ impl<R: Runtime> Telephony<R> {
     pub fn import_inbox(&self) -> crate::Result<ImportResult> {
         Err(Error::Unsupported)
     }
+
+    pub fn take_compose(&self) -> crate::Result<Compose> {
+        Ok(Compose::default())
+    }
 }

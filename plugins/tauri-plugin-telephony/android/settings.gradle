@@ -1,0 +1,3 @@
+// Standalone builds only; inside the app the project is included by tauri.settings.gradle.
+include ':tauri-android'
+project(':tauri-android').projectDir = new File('./.tauri/tauri-api')

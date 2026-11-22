@@ -355,7 +355,8 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_reconcile<'l>(
     }
 }
 
-/// Native UI events with no payload (`back`). Only known names pass.
+/// Native UI events with no payload (`back`, `compose`, `sms-changed`).
+/// Only known names pass.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_app_snipt_telephony_NativeCore_emit<'l>(
     mut env: JNIEnv<'l>,
@@ -364,7 +365,7 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_emit<'l>(
 ) {
     let _ = guard(|| {
         let e = jstr(&mut env, &event)?;
-        if matches!(e.as_str(), "back" | "sms-changed") {
+        if matches!(e.as_str(), "back" | "compose" | "sms-changed") {
             emit(&e, serde_json::json!({}));
         }
         Ok(())

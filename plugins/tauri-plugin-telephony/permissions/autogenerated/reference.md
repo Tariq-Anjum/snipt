@@ -1,6 +1,6 @@
 ## Default Permission
 
-Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost and first-run provider import.
+Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, first-run provider import and the SENDTO draft hand-off.
 
 #### This default permission set includes the following:
 
@@ -10,6 +10,7 @@ Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECU
 - `allow-set-secure`
 - `allow-display-boost`
 - `allow-import-inbox`
+- `allow-take-compose`
 
 ## Permission Table
 
@@ -172,6 +173,32 @@ Enables the status command without any pre-configured scope.
 <td>
 
 Denies the status command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`telephony:allow-take-compose`
+
+</td>
+<td>
+
+Enables the take_compose command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`telephony:deny-take-compose`
+
+</td>
+<td>
+
+Denies the take_compose command without any pre-configured scope.
 
 </td>
 </tr>

@@ -74,4 +74,8 @@ impl<R: Runtime> Telephony<R> {
     pub fn import_inbox(&self) -> crate::Result<ImportResult> {
         self.call("importInbox", ())
     }
+
+    pub fn take_compose(&self) -> crate::Result<Compose> {
+        self.call("takeCompose", ())
+    }
 }

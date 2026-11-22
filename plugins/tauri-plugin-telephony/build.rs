@@ -8,6 +8,7 @@ const COMMANDS: &[&str] = &[
     "set_secure",
     "display_boost",
     "import_inbox",
+    "take_compose",
 ];
 
 fn main() {

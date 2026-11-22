@@ -63,6 +63,11 @@ pub(crate) async fn display_boost<R: Runtime>(app: AppHandle<R>, on: bool) -> Re
 }
 
 #[command]
+pub(crate) async fn take_compose<R: Runtime>(app: AppHandle<R>) -> Result<Compose> {
+    blocking(app, |a| a.telephony().take_compose()).await
+}
+
+#[command]
 pub(crate) async fn import_inbox<R: Runtime>(app: AppHandle<R>) -> Result<ImportResult> {
     blocking(app, |a| a.telephony().import_inbox()).await
 }

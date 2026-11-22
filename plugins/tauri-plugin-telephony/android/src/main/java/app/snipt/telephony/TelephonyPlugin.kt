@@ -1,0 +1,303 @@
+package app.snipt.telephony
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.app.role.RoleManager
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.PowerManager
+import android.view.MotionEvent
+import android.view.WindowManager
+import android.webkit.WebView
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.ActivityResult
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import app.tauri.annotation.ActivityCallback
+import app.tauri.annotation.Command
+import app.tauri.annotation.InvokeArg
+import app.tauri.annotation.TauriPlugin
+import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSArray
+import app.tauri.plugin.JSObject
+import app.tauri.plugin.Plugin
+
+@InvokeArg
+class SendArgs {
+    var id: Long = -1
+    var address: String = ""
+    var body: String = ""
+    var simSlot: Int = 0
+}
+
+@InvokeArg
+class CopyArgs {
+    var text: String = ""
+    var clearAfterMs: Long? = null
+}
+
+@InvokeArg
+class SecureArgs {
+    var scope: String = "vault"
+    var on: Boolean = false
+}
+
+@InvokeArg
+class ToggleArgs {
+    var on: Boolean = false
+}
+
+@InvokeArg
+class BackArgs {
+    var enabled: Boolean = false
+}
+
+@InvokeArg
+class ProviderIdsArgs {
+    var providerIds: LongArray = LongArray(0)
+}
+
+/**
+ * Activity-bound part of the telephony shell (commands from Rust). The
+ * background paths (receivers, notification actions) do not depend on this
+ * class or the WebView.
+ */
+@TauriPlugin
+class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
+    data class Compose(val address: String, val body: String)
+
+    companion object {
+        @Volatile var pendingCompose: Compose? = null
+    }
+
+    private var secureVault = false
+    private var secureGlobal = false
+    private var backCallback: OnBackPressedCallback? = null
+    private var boost: DisplayBoost? = null
+    private var webView: WebView? = null
+    private var insetsJs: String? = null
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun load(webView: WebView) {
+        this.webView = webView
+        val ctx = activity.applicationContext
+        // Keystore DEK into the shared core before the UI lists vault items.
+        Thread { NativeCore.ensure(ctx) }.start()
+
+        // Predictive back: disabled unless the web layer has something to close.
+        (activity as? ComponentActivity)?.let { a ->
+            val cb = object : OnBackPressedCallback(false) {
+                override fun handleOnBackPressed() {
+                    if (NativeCore.ensure(ctx)) NativeCore.emit("back")
+                }
+            }
+            a.onBackPressedDispatcher.addCallback(a, cb)
+            backCallback = cb
+        }
+
+        // Edge-to-edge insets -> CSS vars (--inset-*, CSS px).
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
+            val i = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            val d = v.resources.displayMetrics.density
+            insetsJs = "(function(s){s.setProperty('--inset-top','${i.top / d}px');" +
+                "s.setProperty('--inset-bottom','${i.bottom / d}px');" +
+                "s.setProperty('--inset-left','${i.left / d}px');" +
+                "s.setProperty('--inset-right','${i.right / d}px');})(document.documentElement.style)"
+            pushInsets()
+            insets
+        }
+        ViewCompat.requestApplyInsets(webView)
+        // The page may load after the first insets pass: re-push a few times.
+        for (ms in longArrayOf(800, 2_000, 5_000)) webView.postDelayed({ pushInsets() }, ms)
+
+        val b = DisplayBoost(activity, webView)
+        boost = b
+        webView.setOnTouchListener { _, ev ->
+            if (ev.actionMasked == MotionEvent.ACTION_DOWN || ev.actionMasked == MotionEvent.ACTION_MOVE) b.poke()
+            false
+        }
+    }
+
+    private fun pushInsets() {
+        val js = insetsJs ?: return
+        webView?.post { webView?.evaluateJavascript(js, null) }
+    }
+
+    override fun onResume(activity: AppCompatActivity) {
+        pushInsets()
+        val ctx = activity.applicationContext
+        if (roleHeld()) Thread { ProviderSync.reconcile(ctx) }.start()
+    }
+
+    private fun roleHeld(): Boolean {
+        val rm = activity.getSystemService(RoleManager::class.java) ?: return false
+        return rm.isRoleAvailable(RoleManager.ROLE_SMS) && rm.isRoleHeld(RoleManager.ROLE_SMS)
+    }
+
+    private fun granted(p: String) =
+        activity.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasTelephony() =
+        activity.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY_MESSAGING) ||
+            activity.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+
+    @Command
+    fun status(invoke: Invoke) {
+        val subs = Subs.active(activity)
+        val arr = JSArray()
+        for (s in subs) {
+            arr.put(JSObject().apply {
+                put("subId", s.subId)
+                put("slot", s.slot)
+                put("carrier", s.carrier)
+            })
+        }
+        invoke.resolve(JSObject().apply {
+            put("defaultSmsRole", roleHeld())
+            put("canSend", hasTelephony() && granted(Manifest.permission.SEND_SMS))
+            put("simSlots", subs.size.coerceIn(0, 2))
+            put("subscriptions", arr)
+            put("mms", false)
+            put("notifications", Notifier.canPost(activity))
+        })
+    }
+
+    @Command
+    fun requestDefaultSmsRole(invoke: Invoke) {
+        val rm = activity.getSystemService(RoleManager::class.java)
+        if (rm == null || !rm.isRoleAvailable(RoleManager.ROLE_SMS)) {
+            invoke.reject("SMS role is not available on this device")
+            return
+        }
+        if (rm.isRoleHeld(RoleManager.ROLE_SMS)) {
+            afterRole()
+            invoke.resolve(JSObject().put("held", true))
+            return
+        }
+        startActivityForResult(invoke, rm.createRequestRoleIntent(RoleManager.ROLE_SMS), "roleResult")
+    }
+
+    @ActivityCallback
+    private fun roleResult(invoke: Invoke, result: ActivityResult) {
+        val held = roleHeld()
+        if (held) afterRole()
+        invoke.resolve(JSObject().put("held", held))
+    }
+
+    /** Runtime prompts the role does not cover, then the first-run import. */
+    private fun afterRole() {
+        val want = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= 33 && !granted(Manifest.permission.POST_NOTIFICATIONS)) {
+            want.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (!granted(Manifest.permission.READ_PHONE_STATE)) want.add(Manifest.permission.READ_PHONE_STATE)
+        if (want.isNotEmpty()) activity.runOnUiThread { activity.requestPermissions(want.toTypedArray(), 7301) }
+        val ctx = activity.applicationContext
+        if (!ProviderSync.isImported(ctx)) Thread { ProviderSync.importInbox(ctx) }.start()
+    }
+
+    @Command
+    fun importInbox(invoke: Invoke) {
+        if (!roleHeld() && !granted(Manifest.permission.READ_SMS)) {
+            invoke.reject("SMS access not granted")
+            return
+        }
+        val ctx = activity.applicationContext
+        Thread {
+            val r = ProviderSync.importInbox(ctx)
+            if (r == null) invoke.reject("SMS provider not readable")
+            else invoke.resolve(JSObject().put("imported", r.first).put("skipped", r.second))
+        }.start()
+    }
+
+    @Command
+    fun send(invoke: Invoke) {
+        val a = invoke.parseArgs(SendArgs::class.java)
+        if (a.id < 0 || a.address.isBlank()) {
+            invoke.reject("invalid send request")
+            return
+        }
+        if (!granted(Manifest.permission.SEND_SMS)) {
+            invoke.reject("SEND_SMS not granted")
+            return
+        }
+        val ctx = activity.applicationContext
+        Thread {
+            if (SmsSender.send(ctx, a.id, a.address, a.body, a.simSlot)) invoke.resolve(JSObject().put("ok", true))
+            else invoke.reject("send failed")
+        }.start()
+    }
+
+    @Command
+    fun providerMarkRead(invoke: Invoke) {
+        val a = invoke.parseArgs(ProviderIdsArgs::class.java)
+        val ctx = activity.applicationContext
+        Thread {
+            ProviderSync.markRead(ctx, a.providerIds.toList())
+            invoke.resolve(JSObject().put("ok", true))
+        }.start()
+    }
+
+    @Command
+    fun providerDelete(invoke: Invoke) {
+        val a = invoke.parseArgs(ProviderIdsArgs::class.java)
+        val ctx = activity.applicationContext
+        Thread {
+            ProviderSync.delete(ctx, a.providerIds.toList())
+            invoke.resolve(JSObject().put("ok", true))
+        }.start()
+    }
+
+    @Command
+    fun copySensitive(invoke: Invoke) {
+        val a = invoke.parseArgs(CopyArgs::class.java)
+        SecureClipboard.copy(activity, a.text, a.clearAfterMs ?: SecureClipboard.DEFAULT_CLEAR_MS)
+        invoke.resolve(JSObject().put("ok", true))
+    }
+
+    @Command
+    fun setSecure(invoke: Invoke) {
+        val a = invoke.parseArgs(SecureArgs::class.java)
+        if (a.scope == "global") secureGlobal = a.on else secureVault = a.on
+        val on = secureGlobal || secureVault
+        activity.runOnUiThread {
+            if (on) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+        invoke.resolve(JSObject().put("ok", on))
+    }
+
+    @Command
+    fun displayBoost(invoke: Invoke) {
+        val a = invoke.parseArgs(ToggleArgs::class.java)
+        activity.runOnUiThread { boost?.set(a.on) }
+        invoke.resolve(JSObject().put("ok", true))
+    }
+
+    @Command
+    fun setBackHandler(invoke: Invoke) {
+        val a = invoke.parseArgs(BackArgs::class.java)
+        activity.runOnUiThread { backCallback?.isEnabled = a.enabled }
+        invoke.resolve(JSObject().put("ok", true))
+    }
+
+    @Command
+    fun powerState(invoke: Invoke) {
+        val pm = activity.getSystemService(PowerManager::class.java)
+        invoke.resolve(JSObject().apply {
+            put("powerSave", pm?.isPowerSaveMode == true)
+            put("thermal", pm?.currentThermalStatus ?: 0)
+        })
+    }
+
+    @Command
+    fun takeCompose(invoke: Invoke) {
+        val c = pendingCompose
+        pendingCompose = null
+        if (c == null) invoke.resolve(JSObject().put("present", false))
+        else invoke.resolve(JSObject().put("present", true).put("address", c.address).put("body", c.body))
+    }
+}
