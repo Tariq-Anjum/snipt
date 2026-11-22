@@ -243,3 +243,22 @@ fn failures_retry_then_placeholder_and_bad_pdus_are_rejected() {
     assert_eq!(ph.len(), 1);
     assert!(c.mms_attempt(n3.pending_id).is_err());
 }
+
+#[test]
+fn truncated_mms_says_parts_were_omitted() {
+    // R5 optional: the parser's part cap must not be silent.
+    let mut c = phone();
+    c.set_vault_key([7; 32]);
+    let notif = fx::notification_ind("TX-9", FROM, "http://mmsc.invalid/9", 3600);
+    let n = c.mms_notification(&notif, Some(3), 0).unwrap();
+    c.mms_attempt(n.pending_id).unwrap();
+    let mut pdu = vec![0x8C, 0x84, 0x84];
+    pdu.extend(fx::ct_general(0x23, &[]));
+    pdu.extend(fx::uintvar(100));
+    for _ in 0..100 {
+        pdu.extend(fx::entry(&fx::ct_general(0x03, &[]), &[], b"a"));
+    }
+    let out = c.mms_ingest(n.pending_id, &pdu, None).unwrap();
+    let body = &out.result.notification.message.sms.body;
+    assert!(body.ends_with(snipt_lib::core::TRUNCATED_NOTE), "{body}");
+}

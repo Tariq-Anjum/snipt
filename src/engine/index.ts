@@ -17,7 +17,8 @@ import {
 // Promotions.
 const SERVICE_NOTICE_RE =
   /\b(?:(?:report|results?)\s+(?:is|are)\s+(?:now\s+)?ready|ready\s+for\s+(?:pickup|collection)|appointment\s+(?:is\s+)?(?:confirmed|scheduled|booked))\b/i;
-const LOYALTY_RE = /\bpoints?\b[^\n]{0,80}\b(?:redeem|redemption|adjusted|expir|earned|balance)/i;
+const LOYALTY_RE =
+  /\bpoints?\b[^\n]{0,80}\b(?:redeem|redemption|adjusted|expir|earned|balance)|\b(?:power\s+cash|super\s*coins?|neu\s*coins?|bonus\s+cash)\b/i;
 
 export class SmsEngine {
   private readonly classifier: LinearClassifier;

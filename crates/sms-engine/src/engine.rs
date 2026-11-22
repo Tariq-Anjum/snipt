@@ -17,7 +17,7 @@ js_regex!(
 );
 js_regex!(
     loyalty_re,
-    r"\bpoints?\b[^\n]{0,80}\b(?:redeem|redemption|adjusted|expir|earned|balance)",
+    r"\bpoints?\b[^\n]{0,80}\b(?:redeem|redemption|adjusted|expir|earned|balance)|\b(?:power\s+cash|super\s*coins?|neu\s*coins?|bonus\s+cash)\b",
     i
 );
 

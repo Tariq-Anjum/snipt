@@ -11,7 +11,7 @@ const DEBIT_RE =
 const CREDIT_RE =
   /\b(?:credited|received|deposited|refund(?:ed)?|cashback\s+credited|cr)\b/i;
 const PROMO_BLOCKER_RE =
-  /\b(?:pre-approved|eligible\s+for|get\s+loan|apply\s+now|win\s+upto|flat\s+[0-9]+%\s+off|offer\s+valid)\b/i;
+  /\b(?:pre-approved|eligible\s+for|get\s+loan|apply\s+now|win\s+upto|flat\s+[0-9]+%\s+off|offer\s+valid|power\s+cash|super\s*coins?|neu\s*coins?|reward\s+points|loyalty\s+points|bonus\s+cash)\b/i;
 
 // Phone round 1 (real-device review): notices that mention an amount but are
 // not a completed transaction, and amounts that belong to a balance/limit.

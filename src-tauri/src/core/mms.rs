@@ -132,6 +132,9 @@ fn body_of(m: &RetrieveConf, pdu: &[u8]) -> String {
     truncate(&body, MAX_BODY_CHARS)
 }
 
+/// Appended to an MMS whose parts exceeded the parser's caps.
+pub const TRUNCATED_NOTE: &str = "[Some parts of this MMS could not be shown]";
+
 impl Core {
     /// A WAP push (`WAP_PUSH_DELIVER` `data` extra = M-Notification.ind).
     pub fn mms_notification(
@@ -248,10 +251,20 @@ impl Core {
             .clone()
             .or(p.sender.clone())
             .unwrap_or_else(|| "Unknown".into());
+        // The parser stops at its part cap and says so (R5 optional): tell the
+        // user instead of showing an MMS that looks complete.
+        let body = if m.truncated {
+            truncate(
+                &format!("{}\n{TRUNCATED_NOTE}", body_of(&m, pdu)),
+                MAX_BODY_CHARS,
+            )
+        } else {
+            body_of(&m, pdu)
+        };
         let input = IncomingSms {
             sender: truncate(&sender, MAX_SENDER_CHARS),
             contact_name: None,
-            body: body_of(&m, pdu),
+            body,
             is_known_contact: false,
             sim_slot: p.sim_slot.min(1),
             protocol: None,

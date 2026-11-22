@@ -21,7 +21,7 @@ use sms_types::{BudgetLimits, FinanceSummary, ParsedSms, PaymentCycleConfig};
 use crate::error::{CmdError, CmdResult};
 
 mod mms;
-pub use mms::{MmsImage, MmsIngestOut, MmsNoticeOut, MmsRetrieved};
+pub use mms::{MmsImage, MmsIngestOut, MmsNoticeOut, MmsRetrieved, TRUNCATED_NOTE};
 /// MMS wire types (JNI / tests).
 pub mod mms_types {
     pub use super::mms::{ProviderPart, ThumbJob};

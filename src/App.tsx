@@ -245,10 +245,23 @@ export default function App() {
     });
 
   // ---- platform + back-stack --------------------------------------------
+  // A failed capabilities call keeps the fail-closed 'pending' platform, so
+  // retry with backoff and then offer a manual retry (R5 optional) instead
+  // of leaving vault and backup controls disabled with no explanation.
+  const [capsError, setCapsError] = useState(false);
+  const capsAttempt = useRef(0);
   const refreshCaps = useCallback(() => {
     capabilities()
-      .then(setCaps)
-      .catch(() => {});
+      .then((c) => {
+        capsAttempt.current = 0;
+        setCapsError(false);
+        setCaps(c);
+      })
+      .catch(() => {
+        const n = ++capsAttempt.current;
+        if (n <= 3) window.setTimeout(refreshCaps, 500 * 3 ** (n - 1));
+        else setCapsError(true);
+      });
   }, []);
   useEffect(refreshCaps, [refreshCaps]);
 
@@ -868,6 +881,29 @@ export default function App() {
             onDeleteSms={handleDeleteOne}
             onQuickReply={caps.canSend ? handleQuickReply : undefined}
           />
+
+          {capsError && (
+            <div
+              role="alert"
+              className="fixed top-[calc(var(--inset-top,0px)+3.5rem)] left-4 right-4 md:left-auto md:right-6 md:w-96 z-40 px-4 py-3 text-xs rounded-xl border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 shadow-lg"
+            >
+              <p className="font-semibold">Snipt could not finish starting</p>
+              <p className="mt-1 text-slate-600 dark:text-slate-300">
+                The code vault and backup stay locked until it does.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  capsAttempt.current = 0;
+                  setCapsError(false);
+                  refreshCaps();
+                }}
+                className="mt-2 px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-900 font-semibold"
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
           {platform === 'android' && !caps.defaultSmsRole && (
             <div

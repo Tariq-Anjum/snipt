@@ -40,7 +40,7 @@ js_regex!(
 );
 js_regex!(
     promo_blocker_re,
-    r"\b(?:pre-approved|eligible\s+for|get\s+loan|apply\s+now|win\s+upto|flat\s+[0-9]+%\s+off|offer\s+valid)\b",
+    r"\b(?:pre-approved|eligible\s+for|get\s+loan|apply\s+now|win\s+upto|flat\s+[0-9]+%\s+off|offer\s+valid|power\s+cash|super\s*coins?|neu\s*coins?|reward\s+points|loyalty\s+points|bonus\s+cash)\b",
     i
 );
 js_regex!(

@@ -66,9 +66,11 @@ const PRIMARY_FILTERS: InboxFilter[] = [
 
 const SECONDARY_FILTERS: InboxFilter[] = ['RCS', 'Starred', 'Archived'];
 
-/** Row height at text scale 1; the text part (~68 px) grows with the scale. */
-const ROW_BASE = 24;
-const ROW_TEXT = 68;
+/** Row height: 24 px padding + 2 px slack, plus the text block (name 18.9 +
+ *  2 + preview 2 x 16.85 + 4 + meta ~16 = ~75 px at scale 1), which grows
+ *  with the text scale. 92 px fixed rows clipped the third line / meta. */
+const ROW_BASE = 26;
+const ROW_TEXT = 76;
 const rowHeightFor = (scale: number) => Math.round(ROW_BASE + ROW_TEXT * scale);
 
 function FilterCount({ n }: { n: number | undefined }) {
@@ -161,15 +163,19 @@ const ThreadListRow = memo(function ThreadListRow({
           </span>
         </div>
 
-        <p
-          className={`mt-0.5 ts-preview line-clamp-2 break-words ${
-            thread.unreadCount > 0
-              ? 'text-slate-800 dark:text-slate-200 font-medium'
-              : 'text-slate-500 dark:text-slate-400'
-          }`}
-        >
-          {thread.previewIsOutgoing ? `You: ${snippet}` : snippet}
-        </p>
+        {/* Block-level clip box: -webkit-line-clamp alone let a sliver of a
+            third line show on the phone (line-box rounding at scaled sizes). */}
+        <div className="mt-0.5 ts-preview">
+          <p
+            className={`line-clamp-2 break-words ${
+              thread.unreadCount > 0
+                ? 'text-slate-800 dark:text-slate-200 font-medium'
+                : 'text-slate-500 dark:text-slate-400'
+            }`}
+          >
+            {thread.previewIsOutgoing ? `You: ${snippet}` : snippet}
+          </p>
+        </div>
 
         <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">
           <span>{thread.classification.category}</span>

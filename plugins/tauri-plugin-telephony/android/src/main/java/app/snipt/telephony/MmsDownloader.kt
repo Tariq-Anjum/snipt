@@ -33,6 +33,7 @@ import java.io.File
 object MmsDownloader {
     private const val TAG = "SniptMms"
     const val SCHEME = "snipt-mms"
+    private const val ABANDONED_MS = 24L * 60 * 60 * 1000
     private const val DIR = "snipt-mms"
     private const val MAX_PDU = 8 * 1024 * 1024
     private const val THUMB_MAX_SIDE = 480
@@ -96,6 +97,7 @@ object MmsDownloader {
 
     /** Retries due downloads; posts placeholders for expired/exhausted ones. */
     fun maintenance(ctx: Context) {
+        expireAbandoned(ctx)
         if (!NativeCore.ensure(ctx)) return
         val m = NativeCore.mmsMaintenance()?.let { JSONObject(it) } ?: return
         val ph = m.optJSONArray("placeholders")
@@ -108,6 +110,25 @@ object MmsDownloader {
             val o = retry!!.getJSONObject(i)
             val sub = if (o.isNull("subId")) -1 else o.optInt("subId", -1)
             start(ctx, o.getLong("pendingId"), o.getString("location"), sub)
+        }
+    }
+
+    /** Per-attempt files of one pending MMS (download PDU and NotifyResp ack). */
+    fun discardFiles(ctx: Context, pendingId: Long) {
+        downloadFile(ctx, pendingId).delete()
+        ackFile(ctx, pendingId).delete()
+    }
+
+    /**
+     * Cache files left by an attempt whose callback never ran (process
+     * death, revoked role): removed after [ABANDONED_MS]. A live download
+     * finishes or fails long before that (the core times attempts out at
+     * 10 minutes).
+     */
+    private fun expireAbandoned(ctx: Context) {
+        val cutoff = System.currentTimeMillis() - ABANDONED_MS
+        File(ctx.cacheDir, DIR).listFiles()?.forEach { f ->
+            if (f.isFile && f.lastModified() < cutoff) f.delete()
         }
     }
 
@@ -171,6 +192,8 @@ object MmsDownloader {
                 ctx, uriFor(ctx, f), null, null, resultIntent(ctx, "ack", pendingId)
             )
         } catch (e: Exception) {
+            // No result callback will come for an ack that was never handed off.
+            ackFile(ctx, pendingId).delete()
             Log.w(TAG, "MMS acknowledge not sent: ${e.javaClass.simpleName}")
         }
     }

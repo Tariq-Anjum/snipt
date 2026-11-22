@@ -96,8 +96,8 @@ html.dark.amoled body {
 .ts-preview {
   font-size: calc(0.78rem * var(--text-scale));
   line-height: 1.35;
-  min-height: calc(2 * 1.35em);
-  max-height: calc(2 * 1.35em);
+  /* Exactly two line boxes, clipped by a plain block box. */
+  height: calc(2 * 1.35em);
   overflow: hidden;
 }
 

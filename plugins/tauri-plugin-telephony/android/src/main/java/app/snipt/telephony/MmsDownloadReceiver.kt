@@ -24,7 +24,11 @@ class MmsDownloadReceiver : BroadcastReceiver() {
         val ctx = context.applicationContext
         Thread {
             try {
-                if (!NativeCore.ensure(ctx)) return@Thread
+                if (!NativeCore.ensure(ctx)) {
+                    // No core: nothing will read these files; do not leave them behind.
+                    MmsDownloader.discardFiles(ctx, pid)
+                    return@Thread
+                }
                 when (kind) {
                     "download" ->
                         if (code == Activity.RESULT_OK) MmsDownloader.downloaded(ctx, pid)

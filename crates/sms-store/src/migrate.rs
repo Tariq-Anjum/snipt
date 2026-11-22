@@ -24,6 +24,8 @@ const MIGRATIONS: &[Step] = &[
     // v7: MMS identity/in-flight/display eligibility (R5 #5-#7) and the
     // service-notice classification rules: re-analyse once more.
     Step::SqlThen(schema::SCHEMA_V7, repair_v5),
+    // v8: loyalty currencies (Power Cash, SuperCoins, ...) are not money.
+    Step::SqlThen("SELECT 1;", repair_v5),
 ];
 
 fn repair_v5(tx: &Transaction<'_>) -> Result<(), StoreError> {
