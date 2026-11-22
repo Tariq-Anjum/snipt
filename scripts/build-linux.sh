@@ -39,6 +39,6 @@ mv -f "$OUT.tmp" "$OUT"
 # Release profile may already strip; strip is a no-op safety net.
 command -v strip >/dev/null && strip --strip-unneeded "$OUT" 2>/dev/null || true
 chmod 0755 "$OUT"
-( cd dist && sha256sum Snipt-linux-x86_64 > SHA256SUMS && cat SHA256SUMS )
+( cd dist && { grep -v ' Snipt-linux-x86_64$' SHA256SUMS 2>/dev/null || true; sha256sum Snipt-linux-x86_64; } > SHA256SUMS.new && mv SHA256SUMS.new SHA256SUMS && cat SHA256SUMS )
 echo "size: $(du -h "$OUT" | cut -f1) ($(stat -c %s "$OUT") bytes)"
 file "$OUT" | cut -c1-160
