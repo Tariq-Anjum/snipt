@@ -3264,6 +3264,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sms-mms"
+version = "0.1.0"
+
+[[package]]
 name = "sms-store"
 version = "0.1.0"
 dependencies = [

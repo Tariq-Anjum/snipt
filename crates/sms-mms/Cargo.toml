@@ -1,0 +1,18 @@
+[package]
+name = "sms-mms"
+description = "Snipt MMS PDU decoder (OMA-MMS-ENC 1.3 / WAP-230-WSP binary encoding): M-Notification.ind, M-Retrieve.conf multipart, M-NotifyResp.ind encoder. Pure Rust, no dependencies, bounds-checked, panic-free on hostile input."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# PDU builders + a tiny PNG encoder for tests and the debug fixture generator.
+fixture = []
+
+[dependencies]
+
+[[example]]
+name = "make_fixture"
+required-features = ["fixture"]
