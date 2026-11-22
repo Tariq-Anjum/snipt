@@ -139,3 +139,44 @@ END;
 INSERT OR REPLACE INTO meta(key, value)
     SELECT 'provider_replay_floor', CAST(COALESCE(MAX(provider_id), 0) AS TEXT) FROM messages;
 "#;
+
+/// Schema v3 (S15, MMS receive):
+/// - `messages.mms_id`: the `content://mms` `_id` of a received MMS. A
+///   separate column from `provider_id` (SMS `_id`), so the two provider id
+///   namespaces never collide; unique when set.
+/// - `mms_parts`: non-text parts of an MMS (text parts are the message
+///   body). `kind` = `image` (bytes kept, magic-byte checked, downscaled
+///   `thumb` added by the platform) or `unsupported` (metadata only; the
+///   provider keeps the original). Deleted with the message (FK cascade).
+/// - `mms_pending`: one row per M-Notification.ind transaction: download
+///   location, attempts, expiry and state, so retries survive process death
+///   and a repeated WAP push never creates a second message.
+pub const SCHEMA_V3: &str = r#"
+ALTER TABLE messages ADD COLUMN mms_id INTEGER;
+CREATE UNIQUE INDEX idx_messages_mms_id ON messages(mms_id) WHERE mms_id IS NOT NULL;
+CREATE TABLE mms_parts (
+    part_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    msg_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'unsupported')),
+    content_type TEXT NOT NULL,
+    name TEXT,
+    size INTEGER NOT NULL,
+    data BLOB,
+    thumb BLOB,
+    UNIQUE (msg_id, seq)
+);
+CREATE TABLE mms_pending (
+    pending_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id TEXT NOT NULL UNIQUE,
+    location TEXT NOT NULL,
+    sender TEXT,
+    sub_id INTEGER,
+    sim_slot INTEGER NOT NULL,
+    received_ms INTEGER NOT NULL,
+    expiry_ms INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'done', 'failed')),
+    msg_id INTEGER
+);
+"#;

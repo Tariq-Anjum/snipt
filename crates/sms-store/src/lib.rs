@@ -17,6 +17,7 @@ pub mod fsperm;
 pub mod ids;
 pub mod ingest;
 pub mod migrate;
+pub mod mms;
 pub mod platform;
 pub mod query;
 pub mod restore;
@@ -25,6 +26,9 @@ pub mod search;
 pub mod threads;
 
 pub use ingest::{IncomingSms, IngestReport};
+pub use mms::{
+    AttachmentIn, AttachmentMeta, FailOutcome, MmsNotice, NoticeAction, PendingMms, StoredImage,
+};
 pub use platform::{
     FilterCounts, InboxCounts, OutgoingSms, PartKind, PartOutcome, ProviderRef, Reconciled,
     SendStatus, SendUpdate,

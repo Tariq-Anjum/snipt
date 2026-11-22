@@ -185,76 +185,119 @@ impl Store {
         provider_id: Option<i64>,
         now_ms: i64,
     ) -> Result<(RawSms, bool)> {
-        if input.sim_slot > 1 {
-            return Err(StoreError::Invalid("simSlot must be 0 or 1"));
-        }
-        if !is_valid_timestamp_ms(input.timestamp_ms.unwrap_or(now_ms)) {
-            return Err(StoreError::Invalid("timestampMs out of range"));
-        }
+        let link = match provider_id {
+            Some(p) => ProviderLink::Sms(p),
+            None => ProviderLink::None,
+        };
         let tx = crate::write_tx(&mut self.conn)?;
-        if let Some(pid) = provider_id {
-            let sql = format!(
-                "SELECT {} FROM messages WHERE provider_id = ?1",
-                crate::query::RAW_COLS
-            );
-            let existing = tx
-                .prepare_cached(&sql)?
-                .query_row([pid], crate::query::raw_from_row)
-                .optional()?;
-            if let Some(raw) = existing {
-                return Ok((raw, false));
-            }
-        }
-        let normalized = js::trim(&input.sender).to_string();
-        let existing: Option<(i64, Option<String>)> = tx
-            .prepare_cached(
-                "SELECT thread_id, contact_name FROM messages WHERE sender_lc = ?1
-                 ORDER BY ins_seq LIMIT 1",
-            )?
-            .query_row([normalized.to_lowercase()], |r| Ok((r.get(0)?, r.get(1)?)))
+        let r = ingest_in_tx(&tx, &self.engine, input, link, now_ms)?;
+        tx.commit()?;
+        Ok(r)
+    }
+}
+
+/// Which Telephony provider row (if any) a received message mirrors. SMS and
+/// MMS provider ids are separate namespaces (`content://sms` vs
+/// `content://mms` `_id`), stored in separate columns (`provider_id`,
+/// `mms_id`), so an SMS id can never match an MMS row or vice versa.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProviderLink {
+    None,
+    Sms(i64),
+    Mms(i64),
+}
+
+/// Shared receive path (store.ts `ingestIncomingSms` + provider idempotence)
+/// inside the caller's write transaction. A provider id that is already
+/// stored returns the stored message with `false`.
+pub(crate) fn ingest_in_tx(
+    tx: &Transaction<'_>,
+    engine: &sms_engine::SmsEngine,
+    input: &IncomingSms,
+    link: ProviderLink,
+    now_ms: i64,
+) -> Result<(RawSms, bool)> {
+    if input.sim_slot > 1 {
+        return Err(StoreError::Invalid("simSlot must be 0 or 1"));
+    }
+    if !is_valid_timestamp_ms(input.timestamp_ms.unwrap_or(now_ms)) {
+        return Err(StoreError::Invalid("timestampMs out of range"));
+    }
+    let lookup = match link {
+        ProviderLink::None => None,
+        ProviderLink::Sms(p) => Some(("provider_id", p)),
+        ProviderLink::Mms(p) => Some(("mms_id", p)),
+    };
+    if let Some((col, pid)) = lookup {
+        let sql = format!(
+            "SELECT {} FROM messages WHERE {col} = ?1",
+            crate::query::RAW_COLS
+        );
+        let existing = tx
+            .prepare_cached(&sql)?
+            .query_row([pid], crate::query::raw_from_row)
             .optional()?;
-        let next_id = allocate(&tx, IdKind::Message)?;
-        let thread_id = match &existing {
-            Some((t, _)) => *t,
-            None => allocate(&tx, IdKind::Thread)?,
-        };
-        let contact_name = input
-            .contact_name
-            .as_deref()
-            .map(js::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .or_else(|| existing.and_then(|(_, c)| c));
-        let sms = RawSms {
-            id: next_id,
-            thread_id,
-            sender: normalized,
-            contact_name,
-            body: js::trim(&input.body).to_string(),
-            timestamp_ms: input.timestamp_ms.unwrap_or(now_ms),
-            is_known_contact: input.is_known_contact,
-            is_outgoing: false,
-            sim_slot: input.sim_slot,
-            is_read: Some(false),
-            is_starred: Some(false),
-            protocol: Some(input.protocol.unwrap_or(MessageProtocol::Sms)),
-            rcs_status: None,
-            rcs_rich_card: None,
-        };
-        let a = self.engine.analyze(&sms);
-        insert_message(&tx, &sms, &a)?;
-        if let Some(pid) = provider_id {
+        if let Some(raw) = existing {
+            return Ok((raw, false));
+        }
+    }
+    let normalized = js::trim(&input.sender).to_string();
+    let existing: Option<(i64, Option<String>)> = tx
+        .prepare_cached(
+            "SELECT thread_id, contact_name FROM messages WHERE sender_lc = ?1
+             ORDER BY ins_seq LIMIT 1",
+        )?
+        .query_row([normalized.to_lowercase()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let next_id = allocate(tx, IdKind::Message)?;
+    let thread_id = match &existing {
+        Some((t, _)) => *t,
+        None => allocate(tx, IdKind::Thread)?,
+    };
+    let contact_name = input
+        .contact_name
+        .as_deref()
+        .map(js::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| existing.and_then(|(_, c)| c));
+    let sms = RawSms {
+        id: next_id,
+        thread_id,
+        sender: normalized,
+        contact_name,
+        body: js::trim(&input.body).to_string(),
+        timestamp_ms: input.timestamp_ms.unwrap_or(now_ms),
+        is_known_contact: input.is_known_contact,
+        is_outgoing: false,
+        sim_slot: input.sim_slot,
+        is_read: Some(false),
+        is_starred: Some(false),
+        protocol: Some(input.protocol.unwrap_or(MessageProtocol::Sms)),
+        rcs_status: None,
+        rcs_rich_card: None,
+    };
+    let a = engine.analyze(&sms);
+    insert_message(tx, &sms, &a)?;
+    match link {
+        ProviderLink::None => {}
+        ProviderLink::Sms(pid) => {
             tx.execute(
                 "UPDATE messages SET provider_id = ?2, provider_kind = 'sms' WHERE id = ?1",
                 params![sms.id, pid],
             )?;
         }
-        tx.execute(
-            "DELETE FROM archived_threads WHERE thread_id = ?1",
-            [thread_id],
-        )?;
-        recompute_thread(&tx, thread_id)?;
-        tx.commit()?;
-        Ok((sms, true))
+        ProviderLink::Mms(pid) => {
+            tx.execute(
+                "UPDATE messages SET mms_id = ?2, provider_kind = 'mms' WHERE id = ?1",
+                params![sms.id, pid],
+            )?;
+        }
     }
+    tx.execute(
+        "DELETE FROM archived_threads WHERE thread_id = ?1",
+        [thread_id],
+    )?;
+    recompute_thread(tx, thread_id)?;
+    Ok((sms, true))
 }
