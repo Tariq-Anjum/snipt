@@ -85,6 +85,29 @@ const SimulateSmsModal = import.meta.env.DEV
     )
   : null;
 
+// Dev-only deep links for store screenshots (`?tab=finance&settings=1&open=1`);
+// import.meta.env.DEV is false in release builds, so this is stripped there.
+const DEV_SHOT = import.meta.env.DEV ? new URLSearchParams(window.location.search) : null;
+if (DEV_SHOT?.get('shot') === '1') {
+  // Capture tools paint only what is laid out: render every bubble.
+  const style = document.createElement('style');
+  style.textContent = '.msg-row{content-visibility:visible!important}*{scrollbar-width:none!important}';
+  document.head.appendChild(style);
+  // `&delay=<url>`: a slow 1px image holds the page's load event (which a
+  // headless --screenshot waits for) until async views have rendered.
+  const delay = DEV_SHOT.get('delay');
+  if (delay) {
+    const img = document.createElement('img');
+    img.src = delay;
+    img.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0';
+    document.body.appendChild(img);
+  }
+}
+const devTab = (): ActiveTab => {
+  const t = DEV_SHOT?.get('tab');
+  return t === 'finance' || t === 'reminders' ? t : 'inbox';
+};
+
 const THEME_KEY = 'snipt-theme-v1';
 const STYLE_KEY = 'snipt-design-style-v1';
 const PREFS_KEY = 'snipt-prefs-v1';
@@ -195,7 +218,7 @@ export default function App() {
   const sysDark = useSystemDark();
   const theme: 'light' | 'dark' =
     themeMode === 'system' ? (sysDark ? 'dark' : 'light') : themeMode;
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(() => DEV_SHOT?.get('settings') === '1');
   const [budgetPeriod, setBudgetPeriodState] = useState<BudgetPeriod>(DEFAULT_BUDGET_PERIOD);
   const textScale = useTextScale();
   const [designStyle, setDesignStyle] = useState<DesignStyle>(() => getInitialDesignStyle());
@@ -209,7 +232,7 @@ export default function App() {
   const [version, setVersion] = useState(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('inbox');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(devTab);
   const [inboxFilter, setInboxFilter] = useState<InboxFilter>('All');
   const [simFilter, setSimFilter] = useState<SimFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -448,6 +471,14 @@ export default function App() {
         setCycleConfig(s.cycleConfig);
         if (s.budgetPeriod) setBudgetPeriodState(s.budgetPeriod);
       })
+      .catch(() => {});
+  }, []);
+
+  // Dev screenshots: open the first conversation (`?open=1`).
+  useEffect(() => {
+    if (DEV_SHOT?.get('open') !== '1') return;
+    threadsPage('All', 'all', null, 3)
+      .then((p) => p.threads[Number(DEV_SHOT.get('idx') ?? 0)] && setSelectedThread(p.threads[Number(DEV_SHOT.get('idx') ?? 0)]))
       .catch(() => {});
   }, []);
 
@@ -741,7 +772,9 @@ export default function App() {
           <TopBar
             activeTab={activeTab}
             onSelectTab={setActiveTab}
-            onOpenSimulate={import.meta.env.DEV ? () => setSimulateOpen(true) : undefined}
+            onOpenSimulate={
+              import.meta.env.DEV && !DEV_SHOT?.get('shot') ? () => setSimulateOpen(true) : undefined
+            }
             unreadCount={counts?.unread ?? 0}
             pendingReminderCount={pendingRemindersCount}
             designStyle={glassActive ? 'glass' : 'solid'}

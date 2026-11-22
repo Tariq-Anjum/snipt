@@ -84,6 +84,8 @@ The installer downloads the release assets from GitHub and checks them against t
 
 ## Privacy
 
+Full policy: [PRIVACY.md](PRIVACY.md).
+
 - **No internet permission** on Android. No accounts, analytics, ads or trackers.
 - Messages are stored in an app-private SQLite database. Android cloud backup of app data is disabled; the only backup is the encrypted file you create yourself.
 - OTP codes are only decrypted when you tap Reveal or Copy, and never appear in notifications.
