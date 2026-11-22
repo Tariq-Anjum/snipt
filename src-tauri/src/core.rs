@@ -22,6 +22,10 @@ use crate::error::{CmdError, CmdResult};
 
 mod mms;
 pub use mms::{MmsImage, MmsIngestOut, MmsNoticeOut, MmsRetrieved};
+/// MMS wire types (JNI / tests).
+pub mod mms_types {
+    pub use super::mms::{ProviderPart, ThumbJob};
+}
 
 /// Upper bounds on untrusted frontend input.
 pub const MAX_QUERY_CHARS: usize = 256;

@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JString};
+use jni::sys::jbyteArray;
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong, jstring};
 use serde::{Deserialize, Serialize};
 use sms_store::{IncomingSms, OutgoingSms, PartKind, PartOutcome, SendStatus, SendUpdate};
@@ -147,8 +148,12 @@ struct IngestOut {
 
 fn ingest_one(input: &IngestIn) -> CmdResult<IngestOut> {
     let r = state()?.with_core(|c| c.ingest_incoming(&input.message, input.provider_id))?;
+    Ok(ingest_out(r))
+}
+
+fn ingest_out(r: crate::core::IncomingResult) -> IngestOut {
     let n = r.notification;
-    Ok(IngestOut {
+    IngestOut {
         inserted: r.inserted,
         notify: n.notify,
         title: n.title,
@@ -158,7 +163,7 @@ fn ingest_one(input: &IngestIn) -> CmdResult<IngestOut> {
         body: n.message.sms.body,
         has_otp: n.message.otp.is_some(),
         category: r.thread.classification.category,
-    })
+    }
 }
 
 /// `init(dbPath, dek)`: open (or join) the shared core; install the
@@ -515,4 +520,205 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_emit<'l>(
         }
         Ok(true)
     });
+}
+
+// ---- MMS receive (S15) ------------------------------------------------
+
+/// Largest PDU accepted over JNI (same cap as the parser / MmsService).
+fn pdu_bytes(env: &mut JNIEnv, a: &JByteArray) -> CmdResult<Vec<u8>> {
+    if a.is_null() {
+        return Err(CmdError::invalid("null pdu"));
+    }
+    let n = env
+        .get_array_length(a)
+        .map_err(|_| CmdError::invalid("pdu"))?;
+    if n < 0 || n as usize > sms_mms::MAX_PDU_BYTES {
+        return Err(CmdError::invalid("pdu size"));
+    }
+    env.convert_byte_array(a)
+        .map_err(|_| CmdError::invalid("pdu"))
+}
+
+fn opt_id(v: jlong) -> Option<i64> {
+    (v >= 0).then_some(v)
+}
+
+/// `mmsNotification(pdu, subId, slot) -> {action, pendingId, location, subId} | null`
+/// for a WAP_PUSH_DELIVER `data` extra (M-Notification.ind).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_mmsNotification<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    pdu: JByteArray<'l>,
+    sub_id: jint,
+    slot: jint,
+) -> jstring {
+    json_call(&mut env, |env| {
+        let bytes = pdu_bytes(env, &pdu)?;
+        let slot = u8::try_from(slot.clamp(0, 1)).unwrap_or(0);
+        state()?.with_core(|c| c.mms_notification(&bytes, opt_id(i64::from(sub_id)), slot))
+    })
+}
+
+/// `mmsAttempt(pendingId) -> attempts | -1` (not pending any more).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_mmsAttempt<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    pending_id: jlong,
+) -> jlong {
+    long_call(&mut env, |_| {
+        state()?.with_core(|c| c.mms_attempt(pending_id))
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MaintenanceOut {
+    retry: Vec<crate::core::MmsNoticeOut>,
+    placeholders: Vec<IngestOut>,
+}
+
+/// `mmsMaintenance() -> {retry: [notice], placeholders: [IngestOut]}`:
+/// downloads to retry now, and placeholder messages stored for downloads
+/// that expired or ran out of attempts (app start / resume / next push).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_mmsMaintenance<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jstring {
+    json_call(&mut env, |_| {
+        let (retry, ph) =
+            state()?.with_core(|c| Ok((c.mms_retryable()?, c.mms_give_up_exhausted()?)))?;
+        let placeholders: Vec<IngestOut> = ph.into_iter().map(ingest_out).collect();
+        if placeholders.iter().any(|p| p.inserted) {
+            emit("sms-changed", serde_json::json!({}));
+        }
+        Ok(MaintenanceOut {
+            retry,
+            placeholders,
+        })
+    })
+}
+
+/// `mmsRetrieved(pendingId, pdu) -> MmsRetrieved JSON | null`: headers and
+/// parts (PDU ranges) for the Telephony provider write.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_mmsRetrieved<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    pending_id: jlong,
+    pdu: JByteArray<'l>,
+) -> jstring {
+    json_call(&mut env, |env| {
+        let bytes = pdu_bytes(env, &pdu)?;
+        state()?.with_core(|c| c.mms_retrieved(pending_id, &bytes))
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MmsIngestJni {
+    ingest: IngestOut,
+    thumbs: Vec<crate::core::mms_types::ThumbJob>,
+}
+
+/// `mmsIngest(pendingId, pdu, mmsId) -> {ingest: IngestOut, thumbs} | null`
+/// (`mmsId` -1 when the provider write failed).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_mmsIngest<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    pending_id: jlong,
+    pdu: JByteArray<'l>,
+    mms_id: jlong,
+) -> jstring {
+    json_call(&mut env, |env| {
+        let bytes = pdu_bytes(env, &pdu)?;
+        let out = state()?.with_core(|c| c.mms_ingest(pending_id, &bytes, opt_id(mms_id)))?;
+        let ingest = ingest_out(out.result);
+        if ingest.inserted {
+            emit(
+                "sms-received",
+                serde_json::json!({ "threadId": ingest.thread_id }),
+            );
+        }
+        Ok(MmsIngestJni {
+            ingest,
+            thumbs: out.thumbs,
+        })
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MmsFailedOut {
+    outcome: sms_store::FailOutcome,
+    placeholder: Option<IngestOut>,
+}
+
+/// `mmsFailed(pendingId) -> {outcome: retry|gaveUp|ignored, placeholder?}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_mmsFailed<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    pending_id: jlong,
+) -> jstring {
+    json_call(&mut env, |_| {
+        let (outcome, ph) = state()?.with_core(|c| c.mms_failed(pending_id))?;
+        let placeholder = ph.map(ingest_out);
+        if let Some(p) = &placeholder
+            && p.inserted
+        {
+            emit(
+                "sms-received",
+                serde_json::json!({ "threadId": p.thread_id }),
+            );
+        }
+        Ok(MmsFailedOut {
+            outcome,
+            placeholder,
+        })
+    })
+}
+
+/// `mmsThumb(partId, jpeg) -> bool`: platform-made thumbnail (JPEG, capped).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_mmsThumb<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    part_id: jlong,
+    jpeg: JByteArray<'l>,
+) -> jboolean {
+    bool_call(&mut env, |env| {
+        let bytes = pdu_bytes(env, &jpeg)?;
+        let ok = state()?.with_core(|c| c.mms_set_thumb(part_id, &bytes))?;
+        if ok {
+            emit("sms-changed", serde_json::json!({}));
+        }
+        Ok(ok)
+    })
+}
+
+/// `mmsNotifyResp(pendingId) -> byte[] | null`: M-NotifyResp.ind (Retrieved).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_mmsNotifyResp<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    pending_id: jlong,
+) -> jbyteArray {
+    let r = catch_unwind(AssertUnwindSafe(|| -> Option<jbyteArray> {
+        let b = state()
+            .ok()?
+            .with_core(|c| c.mms_notify_resp(pending_id))
+            .ok()?;
+        env.byte_array_from_slice(&b).ok().map(|a| a.into_raw())
+    }));
+    match r {
+        Ok(Some(p)) => p,
+        _ => {
+            clear_pending(&mut env);
+            std::ptr::null_mut()
+        }
+    }
 }

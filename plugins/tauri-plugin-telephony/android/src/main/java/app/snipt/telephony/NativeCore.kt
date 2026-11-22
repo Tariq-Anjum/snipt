@@ -79,4 +79,21 @@ object NativeCore {
     @JvmStatic external fun reconcileBegin(): String?
     @JvmStatic external fun reconcile(json: String): String?
     @JvmStatic external fun emit(event: String)
+
+    // ---- MMS receive (S15); PDUs are passed as byte arrays, JSON out ----
+    /** WAP push data -> {action: download|duplicate, pendingId, location, subId}. */
+    @JvmStatic external fun mmsNotification(pdu: ByteArray, subId: Int, slot: Int): String?
+    /** Counts a download attempt; -1 when the MMS is no longer pending. */
+    @JvmStatic external fun mmsAttempt(pendingId: Long): Long
+    /** {retry: [notice], placeholders: [ingest]} */
+    @JvmStatic external fun mmsMaintenance(): String?
+    /** M-Retrieve.conf -> headers + parts (PDU ranges) for the provider write. */
+    @JvmStatic external fun mmsRetrieved(pendingId: Long, pdu: ByteArray): String?
+    /** -> {ingest, thumbs: [{partId, offset, len}]}; mmsId -1 if the provider write failed. */
+    @JvmStatic external fun mmsIngest(pendingId: Long, pdu: ByteArray, mmsId: Long): String?
+    /** -> {outcome: retry|gaveUp|ignored, placeholder?} */
+    @JvmStatic external fun mmsFailed(pendingId: Long): String?
+    @JvmStatic external fun mmsThumb(partId: Long, jpeg: ByteArray): Boolean
+    /** M-NotifyResp.ind bytes (status Retrieved). */
+    @JvmStatic external fun mmsNotifyResp(pendingId: Long): ByteArray?
 }

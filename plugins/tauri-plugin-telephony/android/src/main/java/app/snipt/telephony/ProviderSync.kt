@@ -81,10 +81,18 @@ object ProviderSync {
             rm.isRoleHeld(android.app.role.RoleManager.ROLE_SMS)
     }
 
+    /**
+     * Table of a row id: `content://sms` or `content://mms` (S15). The two
+     * `_id` namespaces are separate; the core tells which one an id is in.
+     */
+    private fun base(mms: Boolean): android.net.Uri =
+        if (mms) Telephony.Mms.CONTENT_URI else Telephony.Sms.CONTENT_URI
+
     /** (exists, read) of one provider row, or null when it cannot be queried. */
-    private fun rowState(ctx: Context, id: Long): Pair<Boolean, Boolean>? = try {
+    private fun rowState(ctx: Context, id: Long, mms: Boolean): Pair<Boolean, Boolean>? = try {
+        // Telephony.Sms.READ and Telephony.BaseMmsColumns.READ are both "read".
         ctx.contentResolver.query(
-            ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, id),
+            ContentUris.withAppendedId(base(mms), id),
             arrayOf(Telephony.Sms._ID, Telephony.Sms.READ), null, null, null
         )?.use { c -> if (c.moveToFirst()) true to (c.getInt(1) != 0) else false to false }
     } catch (e: Exception) {
@@ -96,35 +104,36 @@ object ProviderSync {
      * that no longer exists counts as ok (nothing left to keep in sync).
      * Without the SMS role every row fails (the provider ignores the write).
      */
-    fun markRead(ctx: Context, ids: List<Long>): List<Pair<Long, Boolean>> {
+    fun markRead(ctx: Context, ids: List<Long>, mms: Boolean = false): List<Pair<Long, Boolean>> {
         val role = roleHeld(ctx)
         val v = ContentValues().apply {
+            // Same column names in both tables (Telephony.BaseMmsColumns READ/SEEN).
             put(Telephony.Sms.READ, 1)
             put(Telephony.Sms.SEEN, 1)
         }
         return ids.filter { it >= 0 }.map { id ->
             if (!role) return@map id to false
             try {
-                ctx.contentResolver.update(ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, id), v, null, null)
+                ctx.contentResolver.update(ContentUris.withAppendedId(base(mms), id), v, null, null)
             } catch (e: Exception) {
                 // verified below
             }
-            val st = rowState(ctx, id)
+            val st = rowState(ctx, id, mms)
             id to (st != null && (!st.first || st.second))
         }.also { r -> r.count { !it.second }.let { if (it > 0) Log.w(TAG, "mark read failed for $it row(s)") } }
     }
 
     /** Deletes rows and verifies each is gone: (id, ok). */
-    fun delete(ctx: Context, ids: List<Long>): List<Pair<Long, Boolean>> {
+    fun delete(ctx: Context, ids: List<Long>, mms: Boolean = false): List<Pair<Long, Boolean>> {
         val role = roleHeld(ctx)
         return ids.filter { it >= 0 }.map { id ->
             if (!role) return@map id to false
             try {
-                ctx.contentResolver.delete(ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, id), null, null)
+                ctx.contentResolver.delete(ContentUris.withAppendedId(base(mms), id), null, null)
             } catch (e: Exception) {
                 // verified below
             }
-            val st = rowState(ctx, id)
+            val st = rowState(ctx, id, mms)
             id to (st != null && !st.first)
         }.also { r -> r.count { !it.second }.let { if (it > 0) Log.w(TAG, "delete failed for $it row(s)") } }
     }

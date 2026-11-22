@@ -62,6 +62,8 @@ class BackArgs {
 @InvokeArg
 class ProviderIdsArgs {
     var providerIds: LongArray = LongArray(0)
+    /** Ids are content://mms rows (S15). */
+    var mms: Boolean = false
 }
 
 @InvokeArg
@@ -103,6 +105,7 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
         Thread {
             if (NativeCore.ensure(ctx) && roleHeld()) {
                 if (!ProviderSync.isImported(ctx)) ProviderSync.importInbox(ctx) else ProviderSync.reconcile(ctx)
+                MmsDownloader.maintenance(ctx)
             }
         }.start()
 
@@ -148,7 +151,11 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
     override fun onResume(activity: AppCompatActivity) {
         pushInsets()
         val ctx = activity.applicationContext
-        if (roleHeld()) Thread { ProviderSync.reconcile(ctx) }.start()
+        if (roleHeld()) Thread {
+            ProviderSync.reconcile(ctx)
+            // S15: retry pending MMS downloads, placeholders for expired ones.
+            MmsDownloader.maintenance(ctx)
+        }.start()
     }
 
     private fun roleHeld(): Boolean {
@@ -179,7 +186,9 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
             put("canSend", hasTelephony() && granted(Manifest.permission.SEND_SMS))
             put("simSlots", subs.size.coerceIn(0, 2))
             put("subscriptions", arr)
-            put("mms", false)
+            // S15: MMS receive works while Snipt is the default SMS app
+            // (download needs RECEIVE_MMS; the ack needs SEND_SMS).
+            put("mms", roleHeld() && granted(Manifest.permission.RECEIVE_MMS) && hasTelephony())
             put("notifications", Notifier.canPost(activity))
         })
     }
@@ -261,14 +270,14 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
     fun providerMarkRead(invoke: Invoke) {
         val a = invoke.parseArgs(ProviderIdsArgs::class.java)
         val ctx = activity.applicationContext
-        Thread { invoke.resolve(results(ProviderSync.markRead(ctx, a.providerIds.toList()))) }.start()
+        Thread { invoke.resolve(results(ProviderSync.markRead(ctx, a.providerIds.toList(), a.mms))) }.start()
     }
 
     @Command
     fun providerDelete(invoke: Invoke) {
         val a = invoke.parseArgs(ProviderIdsArgs::class.java)
         val ctx = activity.applicationContext
-        Thread { invoke.resolve(results(ProviderSync.delete(ctx, a.providerIds.toList()))) }.start()
+        Thread { invoke.resolve(results(ProviderSync.delete(ctx, a.providerIds.toList(), a.mms))) }.start()
     }
 
     /** Resolves only after the clip is set (the ownership-checked wipe is armed). */

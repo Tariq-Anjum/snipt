@@ -10,7 +10,9 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Minimal set: receive/read/send SMS, WAP push (MMS notification, S15),
+    <!-- Minimal set: receive/read/send SMS, WAP push + MMS download (S15:
+         downloadMultimediaMessage needs RECEIVE_MMS; the NotifyResp ack via
+         sendMultimediaMessage needs SEND_SMS - MmsServiceBroker),
          SIM list for Dual-SIM (getActiveSubscriptionInfoList needs
          READ_PHONE_STATE), notifications (API 33+). -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
@@ -88,5 +90,25 @@
         <receiver
             android:name="app.snipt.telephony.NotificationActionReceiver"
             android:exported="false" />
+
+        <!-- S15: result of downloadMultimediaMessage / sendMultimediaMessage
+             (our own explicit PendingIntents only). -->
+        <receiver
+            android:name="app.snipt.telephony.MmsDownloadReceiver"
+            android:exported="false" />
+
+        <!-- S15: the platform MmsService writes the downloaded PDU through a
+             content URI; MmsServiceBroker grants the phone process access on
+             our behalf, so the provider must allow URI grants. Not exported;
+             only cacheDir/snipt-mms/ is mapped. -->
+        <provider
+            android:name="app.snipt.telephony.SniptMmsFileProvider"
+            android:authorities="${applicationId}.snipt.mms"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/snipt_mms_paths" />
+        </provider>
     </application>
 </manifest>

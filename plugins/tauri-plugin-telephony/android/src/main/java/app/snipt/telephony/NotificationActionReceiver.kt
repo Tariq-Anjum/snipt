@@ -59,16 +59,19 @@ class NotificationActionReceiver : BroadcastReceiver() {
             return
         }
         val providerId = if (target.isNull("providerId")) -1L else target.optLong("providerId", -1L)
+        // S15: an MMS lives in content://mms (separate id namespace).
+        val mmsId = if (target.isNull("mmsId")) -1L else target.optLong("mmsId", -1L)
+        val row = if (mmsId >= 0) Row(mmsId, true) else Row(providerId, false)
         when (intent.action) {
             Notifier.ACTION_MARK_READ -> {
-                if (markRead(ctx, msgId, providerId)) {
+                if (markRead(ctx, msgId, row)) {
                     Notifier.cancel(ctx, notifId)
                 } else {
                     toast(ctx, R.string.snipt_action_failed)
                 }
             }
             Notifier.ACTION_DELETE -> {
-                val ok = providerId < 0 || ProviderSync.delete(ctx, listOf(providerId)).all { it.second }
+                val ok = row.id < 0 || ProviderSync.delete(ctx, listOf(row.id), row.mms).all { it.second }
                 if (ok && NativeCore.deleteMessage(msgId)) {
                     Notifier.cancel(ctx, notifId)
                 } else {
@@ -108,18 +111,21 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 )
                 if (!handedOff) Notifier.replied(ctx, notifId, title, text, Notifier.ReplyState.FAILED)
                 // Replying reads the conversation (best-effort; failure keeps it unread).
-                markRead(ctx, msgId, providerId)
+                markRead(ctx, msgId, row)
             }
         }
     }
 
     /** Provider first; the core only after the provider write is verified. */
-    private fun markRead(ctx: Context, msgId: Long, providerId: Long): Boolean {
-        val ok = providerId < 0 || ProviderSync.markRead(ctx, listOf(providerId)).all { it.second }
+    private fun markRead(ctx: Context, msgId: Long, row: Row): Boolean {
+        val ok = row.id < 0 || ProviderSync.markRead(ctx, listOf(row.id), row.mms).all { it.second }
         if (!ok) return false
         NativeCore.markRead(msgId)
         return true
     }
+
+    /** A provider row: id in content://sms (mms=false) or content://mms. */
+    private data class Row(val id: Long, val mms: Boolean)
 
     companion object {
         private const val TAG = "SniptAction"
