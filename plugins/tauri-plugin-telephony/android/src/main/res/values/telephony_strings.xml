@@ -15,4 +15,15 @@
     <string name="snipt_action_stale">That message is no longer available</string>
     <string name="snipt_copy_failed">Could not copy the code</string>
     <string name="snipt_reply_failed">Reply not sent</string>
+    <string name="snipt_widget_sms">Snipt messages</string>
+    <string name="snipt_widget_sms_desc">Unread count and your latest messages (codes stay hidden)</string>
+    <string name="snipt_widget_budget">Monthly budget</string>
+    <string name="snipt_widget_budget_desc">This month\'s spending against your Snipt budget</string>
+    <string name="snipt_widget_code">Verification code</string>
+    <string name="snipt_widget_hidden">New message</string>
+    <string name="snipt_widget_empty">No messages yet</string>
+    <string name="snipt_widget_open_app">Open Snipt to load your budget</string>
+    <string name="snipt_widget_of">of %1$s</string>
+    <string name="snipt_widget_left">%1$s left</string>
+    <string name="snipt_widget_over">%1$s over budget</string>
 </resources>

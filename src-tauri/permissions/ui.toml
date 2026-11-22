@@ -27,6 +27,7 @@ permissions = [
   "allow-budget-stats",
   "allow-set-cycle",
   "allow-set-budget",
+  "allow-set-budget-period",
   "allow-weekly-scan",
   "allow-apply-cleanup",
   "allow-purge-expired-otps",

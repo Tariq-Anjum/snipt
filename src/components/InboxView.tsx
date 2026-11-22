@@ -1,9 +1,6 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Database,
-  Droplets,
-  Languages,
-  ShieldCheck,
   Moon,
   Search,
   Sun,
@@ -21,7 +18,7 @@ import type {
   ThreadRow,
 } from '../api';
 import { useThreadList, useTranslation } from '../hooks/data';
-import { formatInr, formatShortTime, getInitials } from '../utils/format';
+import { formatMoney, formatShortTime, getInitials } from '../utils/format';
 
 interface InboxViewProps {
   version: number;
@@ -55,6 +52,7 @@ interface InboxViewProps {
   isLoadingSample: boolean;
   onGoToBackup: () => void;
   nowMs: number;
+  textScale: number;
 }
 
 const PRIMARY_FILTERS: InboxFilter[] = [
@@ -68,7 +66,10 @@ const PRIMARY_FILTERS: InboxFilter[] = [
 
 const SECONDARY_FILTERS: InboxFilter[] = ['RCS', 'Starred', 'Archived'];
 
-const ROW_HEIGHT = 92;
+/** Row height at text scale 1; the text part (~68 px) grows with the scale. */
+const ROW_BASE = 24;
+const ROW_TEXT = 68;
+const rowHeightFor = (scale: number) => Math.round(ROW_BASE + ROW_TEXT * scale);
 
 function FilterCount({ n }: { n: number | undefined }) {
   if (n === undefined) return null;
@@ -99,6 +100,7 @@ interface RowProps {
   selected: boolean;
   autoTranslate: boolean;
   nowMs: number;
+  rowHeight: number;
   onSelect: (t: ThreadRow) => void;
 }
 
@@ -107,6 +109,7 @@ const ThreadListRow = memo(function ThreadListRow({
   selected,
   autoTranslate,
   nowMs,
+  rowHeight,
   onSelect,
 }: RowProps) {
   const tr = useTranslation(thread.preview || null);
@@ -117,7 +120,7 @@ const ThreadListRow = memo(function ThreadListRow({
   const highlightMeta = thread.latestHasOtp
     ? 'Encrypted OTP'
     : txn
-      ? `${txn.paymentMethod} ${txn.direction === 'Debit' ? '-' : '+'}${formatInr(txn.amount)}`
+      ? `${txn.paymentMethod} ${txn.direction === 'Debit' ? '-' : '+'}${formatMoney(txn.amount, txn.currency)}`
       : rem
         ? rem.reference || rem.dateText || rem.kind
         : needs && tr
@@ -128,7 +131,7 @@ const ThreadListRow = memo(function ThreadListRow({
     <button
       type="button"
       onClick={() => onSelect(thread)}
-      style={{ height: ROW_HEIGHT }}
+      style={{ height: rowHeight }}
       className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-colors border-b border-slate-100 dark:border-slate-800/80 focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-blue-600 ${
         selected ? 'bg-blue-50/80 dark:bg-blue-950/35' : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
       }`}
@@ -145,7 +148,7 @@ const ThreadListRow = memo(function ThreadListRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
           <span
-            className={`text-sm truncate ${
+            className={`ts-name truncate ${
               thread.unreadCount > 0
                 ? 'font-semibold text-slate-950 dark:text-white'
                 : 'font-medium text-slate-800 dark:text-slate-200'
@@ -159,7 +162,7 @@ const ThreadListRow = memo(function ThreadListRow({
         </div>
 
         <p
-          className={`mt-0.5 text-xs line-clamp-2 min-h-[2rem] break-words ${
+          className={`mt-0.5 ts-preview line-clamp-2 break-words ${
             thread.unreadCount > 0
               ? 'text-slate-800 dark:text-slate-200 font-medium'
               : 'text-slate-500 dark:text-slate-400'
@@ -203,6 +206,7 @@ function ThreadList({
   nowMs,
   onSelect,
   scrollRef,
+  textScale,
 }: {
   threads: ThreadRow[];
   hasMore: boolean;
@@ -212,14 +216,23 @@ function ThreadList({
   nowMs: number;
   onSelect: (t: ThreadRow) => void;
   scrollRef: React.RefObject<HTMLDivElement | null>;
+  textScale: number;
 }) {
+  const rowHeight = rowHeightFor(textScale);
   const virt = useVirtualizer({
     count: threads.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: 6,
+    estimateSize: () => rowHeight,
+    overscan: 8,
     getItemKey: (i) => threads[i].threadId,
+    // React 19: no flushSync re-render on every scroll event (it blocked the
+    // main thread mid-fling); fixed-height rows need no synchronous commit.
+    useFlushSync: false,
   });
+  // Text scale changed: every row height changed.
+  useEffect(() => {
+    virt.measure();
+  }, [rowHeight, virt]);
   const items = virt.getVirtualItems();
   const lastIndex = items.length ? items[items.length - 1].index : -1;
 
@@ -241,7 +254,7 @@ function ThreadList({
               top: 0,
               left: 0,
               width: '100%',
-              height: ROW_HEIGHT,
+              height: rowHeight,
               transform: `translateY(${v.start}px)`,
             }}
           >
@@ -250,6 +263,7 @@ function ThreadList({
               selected={selectedId === t.threadId}
               autoTranslate={autoTranslate}
               nowMs={nowMs}
+              rowHeight={rowHeight}
               onSelect={onSelect}
             />
           </div>
@@ -290,6 +304,7 @@ export function InboxView({
   isLoadingSample,
   onGoToBackup,
   nowMs,
+  textScale,
 }: InboxViewProps) {
   const { threads, hasMore, loading, error, loadMore } = useThreadList(
     activeFilter,
@@ -610,7 +625,7 @@ export function InboxView({
             })}
           </div>
 
-          {/* Mobile / Tablet Dual-SIM Filter & Appearance Toggle */}
+          {/* Mobile / Tablet Dual-SIM filter (appearance lives in Settings) */}
           <div className="flex lg:hidden items-center justify-between gap-2">
             <div className="inline-flex items-center gap-1 p-0.5 bg-slate-100 dark:bg-slate-800 rounded-lg">
               {(
@@ -635,77 +650,13 @@ export function InboxView({
               ))}
             </div>
 
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() =>
-                  onChangeDesignStyle(designStyle === 'glass' ? 'solid' : 'glass')
-                }
-                aria-pressed={designStyle === 'glass'}
-                aria-label="Toggle Liquid Glass interface style"
-                className={`min-h-[36px] px-2.5 inline-flex items-center gap-1 text-[11px] font-semibold rounded-lg transition-colors ${
-                  designStyle === 'glass'
-                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-                }`}
-              >
-                <Droplets className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Glass</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={onToggleAutoTranslate}
-                aria-pressed={autoTranslateToEnglish}
-                aria-label="Toggle offline English translation"
-                className={`min-h-[36px] px-2.5 inline-flex items-center gap-1 text-[11px] font-semibold rounded-lg transition-colors ${
-                  autoTranslateToEnglish
-                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-                }`}
-              >
-                <Languages className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>EN</span>
-              </button>
-
-              {secureScreen !== undefined && (
-                <button
-                  type="button"
-                  onClick={onToggleSecureScreen}
-                  aria-pressed={secureScreen}
-                  aria-label="Block screenshots on every Snipt screen"
-                  className={`min-h-[36px] px-2.5 inline-flex items-center gap-1 text-[11px] font-semibold rounded-lg transition-colors ${
-                    secureScreen
-                      ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-                  }`}
-                >
-                  <ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Secure</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={onToggleTheme}
-                aria-label={
-                  theme === 'dark' ? 'Switch to light appearance' : 'Switch to dark appearance'
-                }
-                className="min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-lg"
-              >
-                {theme === 'dark' ? (
-                  <Sun className="w-4 h-4" aria-hidden="true" />
-                ) : (
-                  <Moon className="w-4 h-4" aria-hidden="true" />
-                )}
-              </button>
-            </div>
           </div>
         </div>
 
         {/* Thread rows (virtualized, keyset-paged) */}
         <div
           ref={listRef}
+          data-pinch-text
           className="flex-1 overflow-y-auto smooth-scroll-layer pb-20 md:pb-4"
         >
           {error ? (
@@ -754,6 +705,7 @@ export function InboxView({
               nowMs={nowMs}
               onSelect={onSelectThread}
               scrollRef={listRef}
+              textScale={textScale}
             />
           )}
         </div>

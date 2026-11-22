@@ -55,6 +55,14 @@ impl<R: Runtime> Telephony<R> {
         self.call("displayBoost", req)
     }
 
+    pub fn set_system_bars(&self, req: SystemBarsRequest) -> crate::Result<Done> {
+        self.call("setSystemBars", req)
+    }
+
+    pub fn update_widgets(&self, req: WidgetRequest) -> crate::Result<Done> {
+        self.call("updateWidgets", req)
+    }
+
     pub fn set_back_handler(&self, req: BackRequest) -> crate::Result<Done> {
         self.call("setBackHandler", req)
     }

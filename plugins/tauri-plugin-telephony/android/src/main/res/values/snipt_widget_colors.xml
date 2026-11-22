@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="snipt_w_glass_top">#D9FFFFFF</color>
+    <color name="snipt_w_glass_bottom">#A6F4F8FF</color>
+    <color name="snipt_w_stroke">#B3FFFFFF</color>
+    <color name="snipt_w_text">#FF0B1220</color>
+    <color name="snipt_w_text2">#FF475569</color>
+    <color name="snipt_w_accent">#FF2563EB</color>
+    <color name="snipt_w_warn">#FFDC2626</color>
+    <color name="snipt_w_track">#1F0F172A</color>
+    <color name="snipt_w_pill">#FF2563EB</color>
+</resources>

@@ -335,6 +335,14 @@ pub async fn set_budget(
 }
 
 #[tauri::command]
+pub async fn set_budget_period(
+    state: State<'_, AppState>,
+    period: crate::core::BudgetPeriod,
+) -> CmdResult<crate::core::BudgetPeriod> {
+    state.run(move |c| c.set_budget_period(period)).await
+}
+
+#[tauri::command]
 pub async fn weekly_scan(state: State<'_, AppState>) -> CmdResult<WeeklyScanReport> {
     state.run(|c| c.weekly_scan()).await
 }
@@ -533,6 +541,7 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         budget_stats,
         set_cycle,
         set_budget,
+        set_budget_period,
         weekly_scan,
         apply_cleanup,
         purge_expired_otps,
@@ -570,6 +579,7 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         budget_stats,
         set_cycle,
         set_budget,
+        set_budget_period,
         weekly_scan,
         apply_cleanup,
         purge_expired_otps,

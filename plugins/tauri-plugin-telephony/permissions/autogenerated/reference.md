@@ -1,6 +1,6 @@
 ## Default Permission
 
-Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, first-run provider import and the SENDTO draft hand-off.
+Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, system-bar icon style, home-screen widget snapshot, first-run provider import and the SENDTO draft hand-off.
 
 #### This default permission set includes the following:
 
@@ -9,6 +9,8 @@ Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECU
 - `allow-copy-sensitive`
 - `allow-set-secure`
 - `allow-display-boost`
+- `allow-set-system-bars`
+- `allow-update-widgets`
 - `allow-import-inbox`
 - `allow-take-compose`
 
@@ -154,6 +156,32 @@ Denies the set_secure command without any pre-configured scope.
 <tr>
 <td>
 
+`telephony:allow-set-system-bars`
+
+</td>
+<td>
+
+Enables the set_system_bars command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`telephony:deny-set-system-bars`
+
+</td>
+<td>
+
+Denies the set_system_bars command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `telephony:allow-status`
 
 </td>
@@ -199,6 +227,32 @@ Enables the take_compose command without any pre-configured scope.
 <td>
 
 Denies the take_compose command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`telephony:allow-update-widgets`
+
+</td>
+<td>
+
+Enables the update_widgets command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`telephony:deny-update-widgets`
+
+</td>
+<td>
+
+Denies the update_widgets command without any pre-configured scope.
 
 </td>
 </tr>

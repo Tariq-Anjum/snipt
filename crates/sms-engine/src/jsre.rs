@@ -38,6 +38,7 @@ pub fn translate(js: &str, ignore_case: bool) -> String {
                 ('s', false) => out.push_str(&format!("[{JS_WS_CLASS}]")),
                 ('s', true) => out.push_str(JS_WS_CLASS),
                 ('S', false) => out.push_str(&format!("[^{JS_WS_CLASS}]")),
+                ('n', _) => out.push_str(r"\n"),
                 ('u', _) => {
                     let hex: String = chars[i..i + 4].iter().collect();
                     i += 4;

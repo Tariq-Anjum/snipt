@@ -238,7 +238,8 @@ export function computeFinanceSummary(
         inActiveCycle,
       });
 
-      if (!onlyActiveCycle || inActiveCycle) {
+      // Foreign-currency spends stay in the ledger but not in INR totals.
+      if ((!onlyActiveCycle || inActiveCycle) && txn.currency === 'INR') {
         if (txn.direction === 'Debit') {
           totalDebits += txn.amount;
           if (txn.paymentMethod === 'UPI') upiDebitTotal += txn.amount;

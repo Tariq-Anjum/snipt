@@ -240,6 +240,9 @@ pub fn compute_budget_stats(
         if item.txn.direction != TxnDirection::Debit {
             continue;
         }
+        if item.txn.currency != "INR" {
+            continue;
+        }
         if only_active_cycle && !item.in_active_cycle {
             continue;
         }

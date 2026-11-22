@@ -355,6 +355,18 @@
           "markdownDescription": "Denies the set_secure command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_system_bars command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-system-bars",
+          "markdownDescription": "Enables the set_system_bars command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_system_bars command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-system-bars",
+          "markdownDescription": "Denies the set_system_bars command without any pre-configured scope."
+        },
+        {
           "description": "Enables the status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-status",
@@ -379,10 +391,22 @@
           "markdownDescription": "Denies the take_compose command without any pre-configured scope."
         },
         {
-          "description": "Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, first-run provider import and the SENDTO draft hand-off.\n#### This default permission set includes:\n\n- `allow-request-default-sms-role`\n- `allow-status`\n- `allow-copy-sensitive`\n- `allow-set-secure`\n- `allow-display-boost`\n- `allow-import-inbox`\n- `allow-take-compose`",
+          "description": "Enables the update_widgets command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-widgets",
+          "markdownDescription": "Enables the update_widgets command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_widgets command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-widgets",
+          "markdownDescription": "Denies the update_widgets command without any pre-configured scope."
+        },
+        {
+          "description": "Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, system-bar icon style, home-screen widget snapshot, first-run provider import and the SENDTO draft hand-off.\n#### This default permission set includes:\n\n- `allow-request-default-sms-role`\n- `allow-status`\n- `allow-copy-sensitive`\n- `allow-set-secure`\n- `allow-display-boost`\n- `allow-set-system-bars`\n- `allow-update-widgets`\n- `allow-import-inbox`\n- `allow-take-compose`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, first-run provider import and the SENDTO draft hand-off.\n#### This default permission set includes:\n\n- `allow-request-default-sms-role`\n- `allow-status`\n- `allow-copy-sensitive`\n- `allow-set-secure`\n- `allow-display-boost`\n- `allow-import-inbox`\n- `allow-take-compose`"
+          "markdownDescription": "Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, system-bar icon style, home-screen widget snapshot, first-run provider import and the SENDTO draft hand-off.\n#### This default permission set includes:\n\n- `allow-request-default-sms-role`\n- `allow-status`\n- `allow-copy-sensitive`\n- `allow-set-secure`\n- `allow-display-boost`\n- `allow-set-system-bars`\n- `allow-update-widgets`\n- `allow-import-inbox`\n- `allow-take-compose`"
         }
       ]
     }

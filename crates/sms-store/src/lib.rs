@@ -20,6 +20,7 @@ pub mod migrate;
 pub mod mms;
 pub mod platform;
 pub mod query;
+pub(crate) mod reanalyze;
 pub mod restore;
 pub mod schema;
 pub mod search;

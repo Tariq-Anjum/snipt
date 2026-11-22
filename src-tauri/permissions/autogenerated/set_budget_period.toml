@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-budget-period"
+description = "Enables the set_budget_period command without any pre-configured scope."
+commands.allow = ["set_budget_period"]
+
+[[permission]]
+identifier = "deny-set-budget-period"
+description = "Denies the set_budget_period command without any pre-configured scope."
+commands.deny = ["set_budget_period"]

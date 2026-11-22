@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Liquid Glass card: translucent gradient + 1dp specular rim (no blur in RemoteViews). -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="26dp" />
+            <gradient
+                android:angle="270"
+                android:startColor="@color/snipt_w_glass_top"
+                android:endColor="@color/snipt_w_glass_bottom" />
+            <stroke android:width="1dp" android:color="@color/snipt_w_stroke" />
+        </shape>
+    </item>
+</layer-list>

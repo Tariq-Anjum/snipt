@@ -207,6 +207,7 @@ export function computeBudgetStats(
 
   for (const item of transactions) {
     if (item.txn.direction !== 'Debit') continue;
+    if (item.txn.currency !== 'INR') continue;
     if (onlyActiveCycle && !item.inActiveCycle) continue;
     const bucket = spentMap.get(item.budgetCategory);
     if (!bucket) continue;

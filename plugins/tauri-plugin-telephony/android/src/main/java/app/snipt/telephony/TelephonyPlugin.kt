@@ -19,6 +19,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResult
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
@@ -55,6 +56,16 @@ class ToggleArgs {
 }
 
 @InvokeArg
+class SystemBarsArgs {
+    var light: Boolean = false
+}
+
+@InvokeArg
+class WidgetArgs {
+    var snapshot: String = ""
+}
+
+@InvokeArg
 class BackArgs {
     var enabled: Boolean = false
 }
@@ -83,6 +94,8 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
 
     companion object {
         @Volatile var pendingCompose: Compose? = null
+        /** Tab requested by a widget tap ("inbox" / "finance"). */
+        @Volatile var pendingTab: String? = null
         /** Largest backup the shell hands to Rust (a phone-sized limit; the core accepts up to 256 MiB). */
         const val MAX_BACKUP_BYTES = 64 * 1024 * 1024
     }
@@ -98,6 +111,11 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
     override fun load(webView: WebView) {
         this.webView = webView
         val ctx = activity.applicationContext
+        // Pinch must never zoom the whole page; the web layer scales message
+        // text itself (viewport also sets user-scalable=no).
+        webView.settings.setSupportZoom(false)
+        webView.settings.builtInZoomControls = false
+        webView.settings.displayZoomControls = false
         // Keystore DEK into the shared core before the UI lists vault items;
         // then provider sync. The first onResume of a cold start runs before
         // the plugin is loaded, and the role may have been granted outside
@@ -132,6 +150,8 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
             insets
         }
         ViewCompat.requestApplyInsets(webView)
+        // Cold start from a widget tap: the UI pulls the tab on its first takeCompose.
+        takeWidgetTab(activity.intent)
         // The page may load after the first insets pass: re-push a few times.
         for (ms in longArrayOf(800, 2_000, 5_000)) webView.postDelayed({ pushInsets() }, ms)
 
@@ -319,6 +339,27 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(JSObject().put("ok", true))
     }
 
+    /** Status/navigation bar icon contrast follows the web theme. */
+    @Command
+    fun setSystemBars(invoke: Invoke) {
+        val a = invoke.parseArgs(SystemBarsArgs::class.java)
+        activity.runOnUiThread {
+            val w = activity.window
+            val c = WindowCompat.getInsetsController(w, w.decorView)
+            c.isAppearanceLightStatusBars = a.light
+            c.isAppearanceLightNavigationBars = a.light
+            invoke.resolve(JSObject().put("ok", true))
+        }
+    }
+
+    /** Stores the widget snapshot and refreshes every placed Snipt widget. */
+    @Command
+    fun updateWidgets(invoke: Invoke) {
+        val a = invoke.parseArgs(WidgetArgs::class.java)
+        val ok = SniptWidgets.store(activity.applicationContext, a.snapshot)
+        invoke.resolve(JSObject().put("ok", ok))
+    }
+
     @Command
     fun setBackHandler(invoke: Invoke) {
         val a = invoke.parseArgs(BackArgs::class.java)
@@ -339,8 +380,28 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
     fun takeCompose(invoke: Invoke) {
         val c = pendingCompose
         pendingCompose = null
-        if (c == null) invoke.resolve(JSObject().put("present", false))
-        else invoke.resolve(JSObject().put("present", true).put("address", c.address).put("body", c.body))
+        val tab = pendingTab ?: ""
+        pendingTab = null
+        if (c == null) invoke.resolve(JSObject().put("present", false).put("tab", tab))
+        else invoke.resolve(
+            JSObject().put("present", true).put("address", c.address).put("body", c.body).put("tab", tab)
+        )
+    }
+
+    /** Widget taps reuse the compose hand-off: stash the tab, ping the UI. */
+    override fun onNewIntent(intent: Intent) {
+        if (takeWidgetTab(intent)) {
+            val ctx = activity.applicationContext
+            if (NativeCore.ensure(ctx)) NativeCore.emit("compose")
+        }
+    }
+
+    private fun takeWidgetTab(intent: Intent?): Boolean {
+        val tab = intent?.getStringExtra(SniptWidgets.EXTRA_TAB) ?: return false
+        if (tab != "inbox" && tab != "finance") return false
+        intent.removeExtra(SniptWidgets.EXTRA_TAB)
+        pendingTab = tab
+        return true
     }
 
     // ---- Storage Access Framework (encrypted backup) -------------------

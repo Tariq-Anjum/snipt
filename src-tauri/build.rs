@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "budget_stats",
     "set_cycle",
     "set_budget",
+    "set_budget_period",
     "weekly_scan",
     "apply_cleanup",
     "purge_expired_otps",

@@ -19,12 +19,15 @@ import {
   reminders as fetchReminders,
   setBackHandler,
   setBudget,
+  setBudgetPeriod,
   setCycle,
   setReminderDone,
   threadsPage,
   weeklyScan as fetchWeeklyScan,
+  DEFAULT_BUDGET_PERIOD,
   DEFAULT_CYCLE_CONFIG,
   PENDING_CAPABILITIES,
+  type BudgetPeriod,
   type BudgetCategoryId,
   type BudgetLimits,
   type BudgetPlannerSummary,
@@ -52,9 +55,14 @@ import {
   onNativeEvents,
   requestDefaultSmsRole,
   setSecure,
+  setSystemBars,
   takeComposeDraft,
+  updateWidgets,
   type ComposeDraft,
 } from './api/telephony';
+import { DEFAULT_BUDGET_LIMITS } from './engine/budget';
+import { SettingsSheet, type ThemeMode } from './components/SettingsSheet';
+import { installPinchTextScale, useTextScale } from './utils/textScale';
 import { FinanceView } from './components/FinanceView';
 import { InboxView } from './components/InboxView';
 import { NotificationBanner } from './components/NotificationBanner';
@@ -90,6 +98,10 @@ interface Prefs {
   lastBackupAtMs: number | null;
   /** Android: FLAG_SECURE on every screen (S13 global option). */
   secureScreen: boolean;
+  /** Dark mode uses true black (OLED) instead of navy. */
+  pureBlack: boolean;
+  /** Android widget shows message text (off = sender names only). */
+  widgetPreviews: boolean;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -98,6 +110,8 @@ const DEFAULT_PREFS: Prefs = {
   preferredCloudProvider: 'device_picker',
   lastBackupAtMs: null,
   secureScreen: false,
+  pureBlack: true,
+  widgetPreviews: true,
 };
 
 function loadPrefs(): Prefs {
@@ -112,6 +126,8 @@ function loadPrefs(): Prefs {
         preferredCloudProvider: p.preferredCloudProvider ?? DEFAULT_PREFS.preferredCloudProvider,
         lastBackupAtMs: p.lastBackupAtMs ?? DEFAULT_PREFS.lastBackupAtMs,
         secureScreen: p.secureScreen === true,
+        pureBlack: p.pureBlack ?? DEFAULT_PREFS.pureBlack,
+        widgetPreviews: p.widgetPreviews ?? DEFAULT_PREFS.widgetPreviews,
       };
     }
   } catch {
@@ -120,14 +136,43 @@ function loadPrefs(): Prefs {
   return DEFAULT_PREFS;
 }
 
-function getInitialTheme(): 'light' | 'dark' {
+// Theme follows the system unless the user picked one. v1 stored only an
+// explicit 'light'/'dark' (defaulting to light), so a stored v1 value is
+// ignored: everyone starts on 'system' once.
+const THEME_MODE_KEY = 'snipt-theme-mode-v2';
+
+function getInitialThemeMode(): ThemeMode {
   try {
-    const saved = window.localStorage.getItem(THEME_KEY);
-    if (saved === 'dark' || saved === 'light') return saved;
+    const saved = window.localStorage.getItem(THEME_MODE_KEY);
+    if (saved === 'system' || saved === 'dark' || saved === 'light') return saved;
   } catch {
     // ignore
   }
-  return 'light';
+  return 'system';
+}
+
+function systemDark(): boolean {
+  try {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  } catch {
+    return false;
+  }
+}
+
+function useSystemDark(): boolean {
+  const [dark, setDark] = useState(systemDark);
+  useEffect(() => {
+    let mq: MediaQueryList;
+    try {
+      mq = window.matchMedia('(prefers-color-scheme: dark)');
+    } catch {
+      return;
+    }
+    const on = () => setDark(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return dark;
 }
 
 function getInitialDesignStyle(): DesignStyle {
@@ -146,7 +191,13 @@ export default function App() {
     ...DEFAULT_CYCLE_CONFIG,
   }));
   const [onlyActiveCycle, setOnlyActiveCycle] = useState(true);
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => getInitialTheme());
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => getInitialThemeMode());
+  const sysDark = useSystemDark();
+  const theme: 'light' | 'dark' =
+    themeMode === 'system' ? (sysDark ? 'dark' : 'light') : themeMode;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [budgetPeriod, setBudgetPeriodState] = useState<BudgetPeriod>(DEFAULT_BUDGET_PERIOD);
+  const textScale = useTextScale();
   const [designStyle, setDesignStyle] = useState<DesignStyle>(() => getInitialDesignStyle());
   const [degraded, setDegraded] = useState(
     () => !glassSupported() || prefersReducedTransparency()
@@ -206,7 +257,14 @@ export default function App() {
   const [draft, setDraft] = useState<ComposeDraft | null>(null);
   useEffect(() => {
     if (platform !== 'android') return;
-    const pull = () => takeComposeDraft(platform).then((d) => d && setDraft(d));
+    const pull = () =>
+      takeComposeDraft(platform).then(({ draft: d, tab }) => {
+        if (d) setDraft(d);
+        if (tab) {
+          setSelectedThread(null);
+          setActiveTab(tab);
+        }
+      });
     pull();
     return onNativeEvents({
       'sms-received': bump,
@@ -282,6 +340,7 @@ export default function App() {
   }, []);
 
   useBackLayer(selectedThread !== null, () => setSelectedThread(null));
+  useEffect(() => installPinchTextScale(), []);
   useBackLayer(simulateOpen, () => setSimulateOpen(false));
   useBackLayer(activeTab !== 'inbox', () => setActiveTab('inbox'));
 
@@ -316,13 +375,22 @@ export default function App() {
 
   // ---- appearance ---------------------------------------------------------
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark');
+    const root = document.documentElement;
+    root.classList.toggle('dark', theme === 'dark');
+    root.classList.toggle('amoled', prefs.pureBlack);
+    root.style.colorScheme = theme;
+    // Status/navigation bar icons must contrast with the app background.
+    void setSystemBars(platform, theme === 'light');
+  }, [theme, prefs.pureBlack, platform]);
+
+  useEffect(() => {
     try {
-      window.localStorage.setItem(THEME_KEY, theme);
+      window.localStorage.setItem(THEME_MODE_KEY, themeMode);
+      window.localStorage.removeItem(THEME_KEY);
     } catch {
       // ignore
     }
-  }, [theme]);
+  }, [themeMode]);
 
   useEffect(() => {
     try {
@@ -363,7 +431,10 @@ export default function App() {
   // Billing cycles are owned by the core.
   useEffect(() => {
     getSettings()
-      .then((s) => setCycleConfig(s.cycleConfig))
+      .then((s) => {
+        setCycleConfig(s.cycleConfig);
+        if (s.budgetPeriod) setBudgetPeriodState(s.budgetPeriod);
+      })
       .catch(() => {});
   }, []);
 
@@ -546,6 +617,61 @@ export default function App() {
     }, 350);
   };
 
+  const handleChangeBudgetPeriod = (next: BudgetPeriod) => {
+    const prev = budgetPeriod;
+    setBudgetPeriodState(next);
+    setBudgetPeriod(next)
+      .then((saved) => {
+        setBudgetPeriodState(saved);
+        bump();
+      })
+      .catch(() => {
+        setBudgetPeriodState(prev);
+        setNotice('Could not save the budget period.');
+      });
+  };
+
+  const handleRestoreDefaultLimits = () => {
+    window.clearTimeout(budgetTimer.current);
+    setBudget({ ...DEFAULT_BUDGET_LIMITS })
+      .then(bump)
+      .catch(() => setNotice('Could not restore the default limits.'));
+  };
+
+  // Home-screen widgets (Android): masked, OTP-free snapshot after data
+  // changes, throttled. The budget is the current budget month.
+  useEffect(() => {
+    if (platform !== 'android') return;
+    const id = window.setTimeout(() => {
+      Promise.all([fetchBudgetStats(true), threadsPage('All', 'all', null, 6), fetchInboxCounts()])
+        .then(([b, page, c]) => {
+          const latest = page.threads
+            .filter((t) => t.classification.category !== 'Spam')
+            .slice(0, 3)
+            .map((t) => ({
+              title: t.displayName,
+              body: t.latestHasOtp ? 'Verification code' : t.preview,
+              ts: t.latestTs,
+            }));
+          const month = new Intl.DateTimeFormat('en-IN', { month: 'long' }).format(new Date());
+          const cats = [...b.categories]
+            .sort((x, y) => y.spent - x.spent)
+            .slice(0, 3)
+            .map((x) => ({ name: x.category, spent: x.spent, limit: x.limit }));
+          return updateWidgets(platform, {
+            v: 1,
+            updatedAt: Date.now(),
+            previews: prefs.widgetPreviews,
+            unread: c.unread,
+            latest,
+            budget: { label: `${month} budget`, spent: b.totalSpent, limit: b.totalBudget, categories: cats },
+          });
+        })
+        .catch(() => {});
+    }, 1200);
+    return () => window.clearTimeout(id);
+  }, [platform, version, prefs.widgetPreviews]);
+
   const handleLoadSample = () => {
     setIsLoadingSample(true);
     devImportSeed()
@@ -576,10 +702,10 @@ export default function App() {
           {glassActive && (
             <div
               aria-hidden="true"
-              className="pointer-events-none fixed inset-0 -z-10 overflow-hidden bg-[#edf3fb] dark:bg-[#070d19] transition-colors"
+              className="ambient-canvas pointer-events-none fixed inset-0 -z-10 overflow-hidden transition-colors"
             >
               <div
-                className="liquid-ambient-a absolute -top-28 -left-24 w-[58vw] h-[58vw] max-w-[780px] max-h-[780px] rounded-full opacity-85 dark:opacity-55 blur-3xl"
+                className="liquid-ambient-a absolute -top-28 -left-24 w-[58vw] h-[58vw] max-w-[780px] max-h-[780px] rounded-full opacity-85 dark:opacity-40 blur-3xl"
                 style={{
                   background:
                     theme === 'dark'
@@ -588,7 +714,7 @@ export default function App() {
                 }}
               />
               <div
-                className="liquid-ambient-b absolute -bottom-32 -right-24 w-[62vw] h-[62vw] max-w-[840px] max-h-[840px] rounded-full opacity-80 dark:opacity-50 blur-3xl"
+                className="liquid-ambient-b absolute -bottom-32 -right-24 w-[62vw] h-[62vw] max-w-[840px] max-h-[840px] rounded-full opacity-80 dark:opacity-35 blur-3xl"
                 style={{
                   background:
                     theme === 'dark'
@@ -606,6 +732,7 @@ export default function App() {
             unreadCount={counts?.unread ?? 0}
             pendingReminderCount={pendingRemindersCount}
             designStyle={glassActive ? 'glass' : 'solid'}
+            onOpenSettings={() => setSettingsOpen(true)}
           />
 
           <m.div
@@ -637,7 +764,7 @@ export default function App() {
                 completedReminderIds={completedReminderIds}
                 onToggleReminderDone={handleToggleReminderDone}
                 theme={theme}
-                onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+                onToggleTheme={() => setThemeMode(theme === 'dark' ? 'light' : 'dark')}
                 designStyle={designStyle}
                 glassActive={glassActive}
                 onChangeDesignStyle={(s) => {
@@ -654,6 +781,7 @@ export default function App() {
                 isLoadingSample={isLoadingSample}
                 onGoToBackup={() => setActiveTab('reminders')}
                 nowMs={nowMs}
+                textScale={textScale}
               />
             )}
 
@@ -669,6 +797,9 @@ export default function App() {
                   onChangeBudgetLimit={handleChangeBudgetLimit}
                   onOpenThread={handleJumpToThread}
                   nowMs={nowMs}
+                  budgetPeriod={budgetPeriod}
+                  onChangeBudgetPeriod={handleChangeBudgetPeriod}
+                  onRestoreDefaultLimits={handleRestoreDefaultLimits}
                 />
               ) : (
                 <main className="flex-1 flex items-center justify-center text-sm text-slate-500 dark:text-slate-400">
@@ -758,6 +889,38 @@ export default function App() {
                 Set as default
               </button>
             </div>
+          )}
+
+          {settingsOpen && (
+            <SettingsSheet
+              onClose={() => setSettingsOpen(false)}
+              themeMode={themeMode}
+              onChangeThemeMode={setThemeMode}
+              resolvedTheme={theme}
+              pureBlack={prefs.pureBlack}
+              onTogglePureBlack={() => patchPrefs({ pureBlack: !prefs.pureBlack })}
+              designStyle={designStyle}
+              glassActive={glassActive}
+              onChangeDesignStyle={(s) => {
+                setDesignStyle(s);
+                if (s === 'glass') setDegraded(!glassSupported() || prefersReducedTransparency());
+              }}
+              autoTranslate={prefs.autoTranslateToEnglish}
+              onToggleAutoTranslate={() =>
+                patchPrefs({ autoTranslateToEnglish: !prefs.autoTranslateToEnglish })
+              }
+              secureScreen={platform === 'android' ? prefs.secureScreen : undefined}
+              onToggleSecureScreen={() => patchPrefs({ secureScreen: !prefs.secureScreen })}
+              widgetPreviews={platform === 'android' ? prefs.widgetPreviews : undefined}
+              onToggleWidgetPreviews={() => patchPrefs({ widgetPreviews: !prefs.widgetPreviews })}
+              defaultSmsRole={platform === 'android' ? caps.defaultSmsRole : undefined}
+              onRequestRole={handleRequestRole}
+              onOpenFinance={() => {
+                setSettingsOpen(false);
+                setSelectedThread(null);
+                setActiveTab('finance');
+              }}
+            />
           )}
 
           {draft && (

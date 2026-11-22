@@ -63,6 +63,31 @@ pub(crate) async fn display_boost<R: Runtime>(app: AppHandle<R>, on: bool) -> Re
 }
 
 #[command]
+pub(crate) async fn set_system_bars<R: Runtime>(app: AppHandle<R>, light: bool) -> Result<Done> {
+    blocking(app, move |a| {
+        a.telephony().set_system_bars(SystemBarsRequest { light })
+    })
+    .await
+}
+
+/// Largest widget snapshot accepted from the webview.
+const MAX_WIDGET_SNAPSHOT: usize = 16 * 1024;
+
+#[command]
+pub(crate) async fn update_widgets<R: Runtime>(
+    app: AppHandle<R>,
+    snapshot: String,
+) -> Result<Done> {
+    if snapshot.len() > MAX_WIDGET_SNAPSHOT {
+        return Ok(Done { ok: false });
+    }
+    blocking(app, move |a| {
+        a.telephony().update_widgets(WidgetRequest { snapshot })
+    })
+    .await
+}
+
+#[command]
 pub(crate) async fn take_compose<R: Runtime>(app: AppHandle<R>) -> Result<Compose> {
     blocking(app, |a| a.telephony().take_compose()).await
 }

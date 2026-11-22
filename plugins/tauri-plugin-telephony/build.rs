@@ -7,6 +7,8 @@ const COMMANDS: &[&str] = &[
     "copy_sensitive",
     "set_secure",
     "display_boost",
+    "set_system_bars",
+    "update_widgets",
     "import_inbox",
     "take_compose",
 ];

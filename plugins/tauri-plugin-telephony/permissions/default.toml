@@ -1,13 +1,15 @@
 "$schema" = "schemas/schema.json"
 
 [default]
-description = "Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, first-run provider import and the SENDTO draft hand-off."
+description = "Snipt Android shell: default-SMS role request, status, sensitive copy, FLAG_SECURE, display boost, system-bar icon style, home-screen widget snapshot, first-run provider import and the SENDTO draft hand-off."
 permissions = [
   "allow-request-default-sms-role",
   "allow-status",
   "allow-copy-sensitive",
   "allow-set-secure",
   "allow-display-boost",
+  "allow-set-system-bars",
+  "allow-update-widgets",
   "allow-import-inbox",
   "allow-take-compose",
 ]

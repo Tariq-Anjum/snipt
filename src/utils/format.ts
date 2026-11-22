@@ -7,6 +7,14 @@ export function formatInr(amount: number): string {
   return `${amount < 0 ? '-' : ''}₹${formatted}`;
 }
 
+/** Transaction amount in its own currency (INR as ₹, others as "USD 5.54"). */
+export function formatMoney(amount: number, currency: string = 'INR'): string {
+  if (currency === 'INR') return formatInr(amount);
+  const abs = Math.abs(amount);
+  const n = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(abs);
+  return `${amount < 0 ? '-' : ''}${currency} ${n}`;
+}
+
 export function formatShortTime(timestampMs: number, nowMs: number = Date.now()): string {
   const diff = nowMs - timestampMs;
   const date = new Date(timestampMs);

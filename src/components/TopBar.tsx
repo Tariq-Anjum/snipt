@@ -1,4 +1,4 @@
-import { Bell, Inbox, IndianRupee, Plus } from 'lucide-react';
+import { Bell, Inbox, IndianRupee, Plus, Settings } from 'lucide-react';
 import { m } from 'motion/react';
 import { SniptGlassIcon } from './SniptGlassIcon';
 
@@ -12,6 +12,7 @@ interface TopBarProps {
   unreadCount: number;
   pendingReminderCount: number;
   designStyle: DesignStyle;
+  onOpenSettings: () => void;
 }
 
 const NAV_ITEMS: Array<{
@@ -31,6 +32,7 @@ export function TopBar({
   unreadCount,
   pendingReminderCount,
   designStyle,
+  onOpenSettings,
 }: TopBarProps) {
   return (
     <>
@@ -94,8 +96,16 @@ export function TopBar({
           })}
         </nav>
 
-        {/* Zone 3: Single primary CTA */}
-        <div className="flex items-center shrink-0">
+        {/* Zone 3: Settings + (dev) primary CTA */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="Settings"
+            className="min-w-[44px] min-h-[44px] -mr-2 flex items-center justify-center rounded-full text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+          >
+            <Settings className="w-5 h-5" aria-hidden="true" />
+          </button>
           {import.meta.env.DEV && onOpenSimulate && (
           <m.button
             type="button"
@@ -114,7 +124,7 @@ export function TopBar({
       {/* Mobile Bottom Tab Bar (Thumb Zone, total fixed mobile chrome <= 15% of 844px) */}
       <nav
         aria-label="Mobile navigation"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 min-h-16 safe-bottom bg-white/95 dark:bg-slate-900/95 glass-chrome border-t border-slate-200 dark:border-slate-800 grid grid-cols-3 items-center px-1"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 min-h-16 safe-bottom bg-white dark:bg-slate-900 glass-chrome glass-dock border-t border-slate-200 dark:border-slate-800 grid grid-cols-3 items-center px-1"
       >
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;

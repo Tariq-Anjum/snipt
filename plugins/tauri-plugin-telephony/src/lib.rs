@@ -46,6 +46,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::copy_sensitive,
             commands::set_secure,
             commands::display_boost,
+            commands::set_system_bars,
+            commands::update_widgets,
             commands::import_inbox,
             commands::take_compose,
         ])

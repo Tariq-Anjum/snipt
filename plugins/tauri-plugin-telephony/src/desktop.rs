@@ -44,6 +44,14 @@ impl<R: Runtime> Telephony<R> {
         Ok(Done { ok: false })
     }
 
+    pub fn set_system_bars(&self, _req: SystemBarsRequest) -> crate::Result<Done> {
+        Ok(Done { ok: false })
+    }
+
+    pub fn update_widgets(&self, _req: WidgetRequest) -> crate::Result<Done> {
+        Ok(Done { ok: false })
+    }
+
     pub fn set_back_handler(&self, _req: BackRequest) -> crate::Result<Done> {
         Ok(Done { ok: false })
     }

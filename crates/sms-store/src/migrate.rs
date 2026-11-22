@@ -16,7 +16,16 @@ const MIGRATIONS: &[Step] = &[
     Step::Sql(schema::SCHEMA_V2),
     Step::Sql(schema::SCHEMA_V3),
     Step::SqlThen(schema::SCHEMA_V4, schema::repair_v4),
+    // v5: finance rules fixed (balance/limit amounts, due notices, biller
+    // receipts, card-on-UPI, merchants); re-analyse stored messages once.
+    Step::SqlThen("SELECT 1;", repair_v5),
+    // v6: own-account transfers (InfoBIL*INFT*) are not spending; re-analyse.
+    Step::SqlThen("SELECT 1;", repair_v5),
 ];
+
+fn repair_v5(tx: &Transaction<'_>) -> Result<(), StoreError> {
+    crate::reanalyze::reanalyze_all(tx).map(|_| ())
+}
 
 pub const LATEST_VERSION: i64 = MIGRATIONS.len() as i64;
 

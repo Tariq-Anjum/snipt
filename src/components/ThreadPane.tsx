@@ -1,4 +1,3 @@
-import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Archive,
   ArchiveRestore,
@@ -48,6 +47,7 @@ import {
   formatCountdown,
   formatFullDateTime,
   formatInr,
+  formatMoney,
 } from '../utils/format';
 
 interface ThreadPaneProps {
@@ -73,6 +73,11 @@ const SEND_STATUS_LABEL: Record<SendStatus, string> = {
   failed: 'Not sent',
   indeterminate: 'Send result unknown',
 };
+
+/** DLT headers (e.g. BP-ICICIT-S) and alphanumeric sender IDs cannot receive SMS. */
+function canReply(t: ThreadRow): boolean {
+  return t.senderKind.type !== 'DltHeader' && t.senderKind.type !== 'Alphanumeric';
+}
 
 interface BubbleProps {
   parsed: MessageView;
@@ -189,7 +194,7 @@ const Bubble = memo(function Bubble({
 
         <p
           dir={!showTranslated && translation?.language.isRtl ? 'rtl' : 'ltr'}
-          className="text-sm leading-relaxed whitespace-pre-wrap break-words"
+          className="ts-body leading-relaxed whitespace-pre-wrap break-words"
         >
           {showTranslated && translation ? translation.translatedText : sms.body}
         </p>
@@ -294,7 +299,7 @@ const Bubble = memo(function Bubble({
                 }`}
               >
                 {transaction.direction === 'Credit' ? '+' : '-'}
-                {formatInr(transaction.amount)}
+                {formatMoney(transaction.amount, transaction.currency)}
               </span>
             </div>
             {transaction.availableBalance !== null && (
@@ -415,33 +420,28 @@ export function ThreadPane({
   const scrollRef = useRef<HTMLDivElement>(null);
   const done = new Set(completedReminderIds);
 
-  const virt = useVirtualizer({
-    count: messages.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 132,
-    overscan: 6,
-    getItemKey: (i) => messages[i].sms.id,
-  });
+  // Plain DOM list (threads page in 50 at a time): the browser scrolls it on
+  // the compositor with no per-frame JS. Off-screen bubbles skip layout and
+  // paint via `content-visibility: auto` (.msg-row), and Chrome's scroll
+  // anchoring keeps the viewport still when older messages are prepended.
+  // A JS virtualizer re-measured variable-height bubbles during flings and
+  // corrected scrollTop mid-fling, which read as stutter at 120 Hz.
 
   // Open at the newest message.
   useLayoutEffect(() => {
-    if (messages.length === 0) return;
-    virt.scrollToIndex(messages.length - 1, { align: 'end' });
-    const id = window.setTimeout(
-      () => virt.scrollToIndex(messages.length - 1, { align: 'end' }),
-      80
-    );
+    const el = scrollRef.current;
+    if (messages.length === 0 || !el) return;
+    el.scrollTop = el.scrollHeight;
+    const id = window.setTimeout(() => {
+      el.scrollTop = el.scrollHeight;
+    }, 80);
     return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openedAt]);
 
-  // Keep the viewport anchored when older messages are prepended.
   useLayoutEffect(() => {
-    if (prepended.current > 0) {
-      virt.scrollToIndex(prepended.current, { align: 'start' });
-      prepended.current = 0;
-    }
-  }, [messages, prepended, virt]);
+    prepended.current = 0;
+  }, [messages, prepended]);
 
   // Mark loaded incoming messages read once, then refresh the lists. A
   // message the system SMS store refused stays unread and is not retried in
@@ -680,6 +680,7 @@ export function ThreadPane({
 
       <div
         ref={scrollRef}
+        data-pinch-text
         className="flex-1 overflow-y-auto smooth-scroll-layer px-4 md:px-6 py-5"
       >
         {hasOlder && (
@@ -693,23 +694,10 @@ export function ThreadPane({
             </button>
           </div>
         )}
-        <div style={{ height: virt.getTotalSize(), position: 'relative', width: '100%' }}>
-          {virt.getVirtualItems().map((v) => {
-            const m = messages[v.index];
+        <div>
+          {messages.map((m) => {
             return (
-              <div
-                key={v.key}
-                data-index={v.index}
-                ref={virt.measureElement}
-                className="vrow"
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${v.start}px)`,
-                }}
-              >
+              <div key={m.sms.id} className="msg-row">
                 <Bubble
                   parsed={m}
                   nowMs={nowMs}
@@ -735,7 +723,11 @@ export function ThreadPane({
           {actionError}
         </p>
       )}
-      {caps.canSend ? (
+      {caps.canSend && !canReply(thread) ? (
+        <div className="bg-white dark:bg-slate-900 glass-chrome border-t border-slate-200 dark:border-slate-800 px-4 md:px-6 py-2.5 mb-16 md:mb-0 text-[11px] text-slate-500 dark:text-slate-400">
+          {thread.displayName} is a business sender ID: it cannot receive replies.
+        </div>
+      ) : caps.canSend ? (
         <form
           onSubmit={handleSend}
           className="bg-white dark:bg-slate-900 glass-chrome border-t border-slate-200 dark:border-slate-800 px-4 md:px-6 py-3 mb-16 md:mb-0"

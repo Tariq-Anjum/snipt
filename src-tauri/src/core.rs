@@ -38,6 +38,7 @@ const DEFAULT_PAGE: usize = 50;
 
 const KEY_CYCLE: &str = "cycle_config";
 const KEY_BUDGET: &str = "budget_limits";
+const KEY_PERIOD: &str = "budget_period";
 
 pub struct Core {
     store: Store,
@@ -154,6 +155,33 @@ pub struct MessagesPage {
 pub struct AppSettings {
     pub cycle_config: PaymentCycleConfig,
     pub budget_limits: BudgetLimits,
+    pub budget_period: BudgetPeriod,
+}
+
+/// Budget month and manual reset. `reset_day` (1..=28): the budget period
+/// starts on this day each month. `manual_from_ms`: the user pressed "Start
+/// fresh"; active totals and the budget count only from this instant until
+/// the next period starts. Nothing is deleted either way.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetPeriod {
+    #[serde(default = "default_reset_day")]
+    pub reset_day: u8,
+    #[serde(default)]
+    pub manual_from_ms: Option<i64>,
+}
+
+fn default_reset_day() -> u8 {
+    1
+}
+
+impl Default for BudgetPeriod {
+    fn default() -> Self {
+        BudgetPeriod {
+            reset_day: 1,
+            manual_from_ms: None,
+        }
+    }
 }
 
 /// What the platform shows for a newly received message. `message` is
@@ -446,7 +474,37 @@ impl Core {
         Ok(AppSettings {
             cycle_config: self.cycle_config()?,
             budget_limits: self.budget_limits()?,
+            budget_period: self.budget_period()?,
         })
+    }
+
+    pub fn budget_period(&self) -> CmdResult<BudgetPeriod> {
+        self.load_setting(KEY_PERIOD)
+    }
+
+    pub fn set_budget_period(&mut self, p: BudgetPeriod) -> CmdResult<BudgetPeriod> {
+        if !(1..=28).contains(&p.reset_day) {
+            return Err(CmdError::invalid("budget reset day must be 1..=28"));
+        }
+        if let Some(ms) = p.manual_from_ms
+            && (ms < 0 || ms > now_ms() + 60_000)
+        {
+            return Err(CmdError::invalid("reset time out of range"));
+        }
+        self.save_setting(KEY_PERIOD, &p)?;
+        Ok(p)
+    }
+
+    /// The manual floor only while it is inside the current budget period:
+    /// once the next period starts, the reset has done its job.
+    fn reset_floor(&self, p: &BudgetPeriod, now: i64) -> Option<i64> {
+        let start = sms_engine::budget::get_cycle_window(
+            f64::from(p.reset_day),
+            now,
+            self.store.tz_offset_min,
+        )
+        .start_ms;
+        p.manual_from_ms.filter(|&ms| ms > start)
     }
 
     pub fn set_cycle(&mut self, cfg: PaymentCycleConfig) -> CmdResult<PaymentCycleConfig> {
@@ -833,17 +891,27 @@ impl Core {
 
     pub fn finance_summary(&self, only_active_cycle: bool) -> CmdResult<FinanceSummary> {
         let cfg = self.cycle_config()?;
+        let now = now_ms();
+        let floor = self.reset_floor(&self.budget_period()?, now);
         Ok(self
             .store
-            .finance_summary(&cfg, now_ms(), only_active_cycle)?)
+            .finance_summary_since(&cfg, now, only_active_cycle, floor)?)
     }
 
     pub fn budget_stats(&self, only_active_cycle: bool) -> CmdResult<BudgetPlannerSummary> {
         let cfg = self.cycle_config()?;
         let limits = self.budget_limits()?;
-        Ok(self
-            .store
-            .budget_stats(&cfg, &limits, now_ms(), only_active_cycle)?)
+        let period = self.budget_period()?;
+        let now = now_ms();
+        let floor = self.reset_floor(&period, now);
+        Ok(self.store.budget_stats_period(
+            &cfg,
+            &limits,
+            now,
+            only_active_cycle,
+            period.reset_day,
+            floor,
+        )?)
     }
 
     // ---- cleanup -------------------------------------------------------

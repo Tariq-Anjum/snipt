@@ -189,6 +189,27 @@ pub fn compute_finance_summary_from(
     only_active_cycle: bool,
     tz_offset_min: i32,
 ) -> FinanceSummary {
+    compute_finance_summary_since(
+        threads,
+        cycle_config,
+        now_ms,
+        only_active_cycle,
+        tz_offset_min,
+        None,
+    )
+}
+
+/// [`compute_finance_summary_from`] with a manual reset floor: a transaction
+/// before `since_ms` is outside the active cycle (it still counts in "all
+/// history" and still feeds the latest balances). Not part of the TS oracle.
+pub fn compute_finance_summary_since(
+    threads: &[FinanceThread<'_>],
+    cycle_config: &PaymentCycleConfig,
+    now_ms: i64,
+    only_active_cycle: bool,
+    tz_offset_min: i32,
+    since_ms: Option<i64>,
+) -> FinanceSummary {
     let mut transactions: Vec<FinanceTransactionItem> = Vec::new();
     let mut bal_order: Vec<String> = Vec::new();
     let mut bal: HashMap<String, AccountBalance> = HashMap::new();
@@ -209,7 +230,7 @@ pub fn compute_finance_summary_from(
                 cycle_config,
                 now_ms,
                 tz_offset_min,
-            );
+            ) && since_ms.is_none_or(|s| msg.timestamp_ms >= s);
             let budget_category =
                 categorize_merchant_expense(txn.merchant_or_vpa.as_deref(), msg.body);
             transactions.push(FinanceTransactionItem {
@@ -224,7 +245,8 @@ pub fn compute_finance_summary_from(
                 in_active_cycle: in_active,
             });
 
-            if !only_active_cycle || in_active {
+            // Foreign-currency spends stay in the ledger but not in INR totals.
+            if (!only_active_cycle || in_active) && txn.currency == "INR" {
                 match txn.direction {
                     TxnDirection::Debit => {
                         total_debits += txn.amount;

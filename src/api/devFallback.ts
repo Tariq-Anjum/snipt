@@ -47,6 +47,8 @@ let state: StoreState = {
 };
 let cycle: PaymentCycleConfig = { ...DEFAULT_CYCLE_CONFIG };
 let limits: BudgetLimits = { ...DEFAULT_BUDGET_LIMITS };
+// Dev fallback only: stored but not applied to the TS budget math.
+let period: { resetDay: number; manualFromMs: number | null } = { resetDay: 1, manualFromMs: null };
 let threadCache: ThreadSummary[] | null = null;
 const sendStatus = new Map<number, SendStatus>();
 
@@ -294,7 +296,10 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
       return null;
     }
     case 'get_settings':
-      return { cycleConfig: cycle, budgetLimits: limits };
+      return { cycleConfig: cycle, budgetLimits: limits, budgetPeriod: period };
+    case 'set_budget_period':
+      period = { ...a.period };
+      return period;
     case 'purge_expired_otps': {
       const { nextState, purgedCount } = purgeExpiredOtpMessages(state, Date.now());
       state = nextState;

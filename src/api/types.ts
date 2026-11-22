@@ -211,9 +211,18 @@ export interface InboxCounts {
   capacity: number;
 }
 
+/** Budget month (starts on `resetDay`, 1-28) and the manual "start fresh" instant. */
+export interface BudgetPeriod {
+  resetDay: number;
+  manualFromMs: number | null;
+}
+
+export const DEFAULT_BUDGET_PERIOD: BudgetPeriod = { resetDay: 1, manualFromMs: null };
+
 export interface AppSettings {
   cycleConfig: PaymentCycleConfig;
   budgetLimits: BudgetLimits;
+  budgetPeriod: BudgetPeriod;
 }
 
 /** Input of `ingest_incoming` (store.ts `ingestIncomingSms`). */

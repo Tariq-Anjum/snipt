@@ -194,6 +194,17 @@ const hazardInputs: RawSms[] = [
   makeSms('   ', '   ﻿  '),
   makeSms('TX-ZZ-P', 'two-letter entity (not DLT)'),
   makeSms('TXZOMATO-P', 'no dash DLT'),
+  // Phone round 1: real-world shapes (names/numbers changed)
+  makeSms('BP-ICICIT-S', 'USD 5.54 spent using ICICI Bank Card XX1111 on 18-Nov-26 on OPENTOOL. Avl Limit: INR 95,221.00. If not you, call 1800 2662/SMS BLOCK 1111 to 9200000000'),
+  makeSms('BP-ICICIT-S', 'ICICI Bank Credit Card XX2222 debited for INR 76.00 on 22-Nov-26 for UPI-151641006879-RAVI KUM. To dispute call 18001080/SMS BLOCK 2222 to 9200000000'),
+  makeSms('BP-ICICIT-S', 'ICICI Bank Acct XX333 debited for Rs 25.00 on 21-Nov-26; ASHA DEVI credited. UPI:134225588727. Call 18002662 for dispute. SMS BLOCK 333 to 9200000000'),
+  makeSms('VM-BSESRP-S', 'CA No. 000151813123 , Rs. 680 is due on 26-NOV-26. To view & pay your bill click https://example.in/x .Ignore if paid . Team BRPL'),
+  makeSms('VM-BSESRP-S', 'Dear Customer, payment against CA NO. 150214035 of Rs. 890.0 / has been received, subject to realization & updation. Team BRPL'),
+  makeSms('AX-HDFCBK-S', 'Rs 199 will be debited from your A/c XX4444 on 25-Nov for mandate NETFLIX'),
+  makeSms('AX-HDFCBK-S', 'EMI of Rs 5,000 debited from A/c XX4444. Next EMI is due on 5-Dec'),
+  makeSms('AX-HDFCBK-S', 'Payment of Rs 12,000 received towards your Credit Card XX5555. Thank you'),
+  makeSms('BP-ICICIT-S', 'ICICI Bank Acc XX333 debited Rs. 20,086.06 on 04-Nov-26 InfoBIL*INFT*FK47.Avl Bal Rs. 36,303.68.To dispute call 18002662'),
+  makeSms('BP-ICICIT-S', 'MICROSOFT INDIA refund of Rs 2.00 credited to ICICI Bank Credit Card XX1111 on 29-OCT-26. Revised total due Rs 20,086.06, minimum due Rs 12,348.55'),
 ];
 const analyzeInputs = [...seed, ...bulkOnly.slice(0, 2000), ...hazardInputs.map(canon)];
 const fnvInputs = [

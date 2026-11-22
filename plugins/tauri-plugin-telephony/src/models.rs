@@ -76,6 +76,20 @@ pub struct ToggleRequest {
     pub on: bool,
 }
 
+/// Status/navigation bar icon style: `light` = light background, dark icons.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemBarsRequest {
+    pub light: bool,
+}
+
+/// Home-screen widget snapshot (JSON built by the web UI; masked, no OTPs).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WidgetRequest {
+    pub snapshot: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BackRequest {
@@ -131,6 +145,9 @@ pub struct Compose {
     pub address: String,
     #[serde(default)]
     pub body: String,
+    /// Tab a home-screen widget asked to open ("inbox" / "finance"), or "".
+    #[serde(default)]
+    pub tab: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

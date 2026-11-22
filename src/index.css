@@ -24,6 +24,8 @@
 
 @layer base {
   :root {
+    /* Message text scale (pinch in a thread or Settings > Text size). */
+    --text-scale: 1;
     --font-display: 'Plus Jakarta Sans Variable', system-ui, -apple-system, sans-serif;
     --font-sans: 'DM Sans Variable', system-ui, -apple-system, sans-serif;
     --font-mono: ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace;
@@ -52,6 +54,58 @@
   code, pre, .font-mono {
     font-family: var(--font-mono);
   }
+}
+
+/* Pure black (OLED) dark palette: neutral greys instead of navy slate, brighter
+ * secondary text for contrast. Tailwind v4 utilities read these variables, so
+ * every dark: slate utility follows. Light mode is untouched. */
+.dark.amoled {
+  --color-slate-950: #000000;
+  --color-slate-900: #0d0d0f;
+  --color-slate-800: #222226;
+  --color-slate-700: #3b3b41;
+  --color-slate-600: #5d5d66;
+  --color-slate-500: #9d9da8;
+  --color-slate-400: #bdbdc6;
+  --color-slate-300: #dedee4;
+  --color-slate-200: #eeeef2;
+  --color-slate-100: #f8f8fa;
+  color-scheme: dark;
+}
+
+html.dark,
+html.dark body {
+  background-color: #020617;
+}
+
+html.dark.amoled,
+html.dark.amoled body {
+  background-color: #000;
+}
+
+/* Text that follows the text-size setting / pinch gesture. */
+.ts-body {
+  font-size: calc(0.9rem * var(--text-scale));
+}
+
+.ts-name {
+  font-size: calc(0.875rem * var(--text-scale));
+  line-height: 1.35;
+}
+
+.ts-preview {
+  font-size: calc(0.78rem * var(--text-scale));
+  line-height: 1.35;
+  min-height: calc(2 * 1.35em);
+  max-height: calc(2 * 1.35em);
+  overflow: hidden;
+}
+
+/* Thread bubbles: off-screen rows skip layout/paint; the remembered size
+ * keeps the scrollbar stable once a row has rendered. */
+.msg-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
 }
 
 .tabular-nums {
@@ -148,6 +202,47 @@
     inset 0 1px 0 0 rgba(255, 255, 255, 0.14),
     inset 0 0 0 0.5px rgba(255, 255, 255, 0.06),
     0 14px 36px -16px rgba(2, 6, 23, 0.62);
+}
+
+/* Pure black glass: neutral smoked glass instead of navy */
+.liquid-glass.dark.amoled .glass-chrome {
+  background: linear-gradient(180deg, rgba(14, 14, 16, 0.86) 0%, rgba(6, 6, 8, 0.8) 100%);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.1), 0 12px 32px -14px rgba(0, 0, 0, 0.8);
+}
+
+.liquid-glass.dark.amoled .glass-panel {
+  background: linear-gradient(155deg, rgba(22, 22, 26, 0.7) 0%, rgba(8, 8, 10, 0.55) 100%);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.09), 0 14px 36px -16px rgba(0, 0, 0, 0.85);
+}
+
+.liquid-glass.dark.amoled .glass-bubble-in {
+  background: linear-gradient(160deg, rgba(34, 34, 40, 0.92) 0%, rgba(20, 20, 24, 0.88) 100%);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.12), 0 10px 26px -14px rgba(0, 0, 0, 0.8);
+}
+
+.liquid-glass.dark.amoled .glass-sheet {
+  background: linear-gradient(155deg, rgba(24, 24, 28, 0.94) 0%, rgba(10, 10, 12, 0.9) 100%);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.liquid-glass.dark.amoled .glass-toast {
+  background: rgba(20, 20, 24, 0.96);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.ambient-canvas {
+  background: #edf3fb;
+}
+
+.dark .ambient-canvas {
+  background: #070d19;
+}
+
+.dark.amoled .ambient-canvas {
+  background: #000;
 }
 
 /* Translucent specular glass bubble / button sheen: no blur */
@@ -263,4 +358,46 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Bottom dock: list text must not read through it (legibility over glass). */
+.liquid-glass .glass-chrome.glass-dock {
+  background: linear-gradient(180deg, rgb(255, 255, 255) 0%, rgb(248, 251, 255) 100%);
+}
+
+.liquid-glass.dark .glass-chrome.glass-dock {
+  background: linear-gradient(180deg, rgb(15, 23, 42) 0%, rgb(2, 6, 23) 100%);
+}
+
+.liquid-glass.dark.amoled .glass-chrome.glass-dock {
+  background: linear-gradient(180deg, rgb(12, 12, 14) 0%, rgb(0, 0, 0) 100%);
+}
+
+/* Sheets over busy lists: nearly opaque so text behind never reads through. */
+.liquid-glass.dark .glass-sheet {
+  background: linear-gradient(155deg, rgba(20, 28, 46, 0.985) 0%, rgba(11, 17, 32, 0.985) 100%);
+}
+
+.liquid-glass.dark.amoled .glass-sheet {
+  background: linear-gradient(155deg, rgba(22, 22, 26, 0.985) 0%, rgba(10, 10, 12, 0.985) 100%);
+}
+
+.liquid-glass:not(.dark) .glass-sheet {
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.985) 0%, rgba(248, 252, 255, 0.98) 100%);
+}
+
+/* Settings sheet entrance (transform/opacity only). */
+@keyframes sheetUp {
+  from {
+    transform: translate3d(0, 24px, 0);
+    opacity: 0;
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+  }
+}
+
+.sheet-enter {
+  animation: sheetUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }

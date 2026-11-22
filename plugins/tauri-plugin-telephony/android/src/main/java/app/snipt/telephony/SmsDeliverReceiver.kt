@@ -58,7 +58,16 @@ class SmsDeliverReceiver : BroadcastReceiver() {
             Log.w(TAG, "ingest rejected")
             return
         }
-        Notifier.incoming(ctx, JSONObject(out), slot)
+        val o = JSONObject(out)
+        Notifier.incoming(ctx, o, slot)
+        // Widgets: only messages that would notify (spam and blocked stay out).
+        if (o.optBoolean("notify")) {
+            try {
+                SniptWidgets.noteIncoming(ctx, o.optString("title", ""), o.optString("body", ""), o.optBoolean("hasOtp"), received)
+            } catch (t: Throwable) {
+                Log.w(TAG, "widget update failed: ${t.javaClass.simpleName}")
+            }
+        }
     }
 
     companion object {

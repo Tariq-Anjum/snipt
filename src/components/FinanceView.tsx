@@ -1,15 +1,16 @@
-import { ArrowUpRight, Calendar, Search } from 'lucide-react';
+import { ArrowUpRight, Calendar, RotateCcw, Search, Undo2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { getCycleWindow } from '../engine/budget';
 import { PAYMENT_METHODS } from '../engine/types';
 import type {
   BudgetCategoryId,
+  BudgetPeriod,
   BudgetPlannerSummary,
   FinanceSummary,
   PaymentCycleConfig,
   PaymentMethod,
 } from '../api';
-import { formatFullDateTime, formatInr } from '../utils/format';
+import { formatFullDateTime, formatInr, formatMoney } from '../utils/format';
 
 interface FinanceViewProps {
   summary: FinanceSummary;
@@ -21,6 +22,9 @@ interface FinanceViewProps {
   onChangeBudgetLimit: (category: BudgetCategoryId, limit: number) => void;
   onOpenThread: (threadId: number) => void;
   nowMs: number;
+  budgetPeriod: BudgetPeriod;
+  onChangeBudgetPeriod: (p: BudgetPeriod) => void;
+  onRestoreDefaultLimits: () => void;
 }
 
 type LedgerFilter =
@@ -41,8 +45,15 @@ export function FinanceView({
   onChangeBudgetLimit,
   onOpenThread,
   nowMs,
+  budgetPeriod,
+  onChangeBudgetPeriod,
+  onRestoreDefaultLimits,
 }: FinanceViewProps) {
   const [filter, setFilter] = useState<LedgerFilter>('all');
+  const [confirm, setConfirm] = useState<'reset' | 'limits' | null>(null);
+  const period = getCycleWindow(budgetPeriod.resetDay, nowMs);
+  const manualActive =
+    budgetPeriod.manualFromMs !== null && budgetPeriod.manualFromMs > period.startMs;
   const [query, setQuery] = useState('');
 
   const filteredTxns = useMemo(() => {
@@ -181,6 +192,94 @@ export function FinanceView({
               {summary.transactionCount} alerts in view
             </p>
           </div>
+        </section>
+
+        {/* Budget month + manual reset (nothing is deleted) */}
+        <section
+          aria-label="Budget period and reset"
+          className="bg-white dark:bg-slate-900 glass-panel border border-slate-200 dark:border-slate-800 rounded-2xl p-5"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Budget period &amp; reset
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                {manualActive && budgetPeriod.manualFromMs !== null
+                  ? `Counting since ${formatFullDateTime(budgetPeriod.manualFromMs)} (manual reset) until ${period.label.split('–')[1]?.trim() ?? 'the next period'}.`
+                  : `Current budget month: ${period.label}. Resets automatically on day ${budgetPeriod.resetDay}.`}
+              </p>
+            </div>
+            <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+              <span>Monthly reset day</span>
+              <select
+                value={budgetPeriod.resetDay}
+                onChange={(e) =>
+                  onChangeBudgetPeriod({ ...budgetPeriod, resetDay: Number(e.target.value) })
+                }
+                className="px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
+              >
+                {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                  <option key={d} value={d}>
+                    Day {d}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm !== 'reset') {
+                  setConfirm('reset');
+                  return;
+                }
+                setConfirm(null);
+                onChangeBudgetPeriod({ ...budgetPeriod, manualFromMs: Date.now() });
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors min-h-[40px] ${
+                confirm === 'reset'
+                  ? 'bg-red-600 text-white'
+                  : 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-100'
+              }`}
+            >
+              <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+              {confirm === 'reset' ? 'Tap again to start fresh' : 'Start fresh now'}
+            </button>
+            {manualActive && (
+              <button
+                type="button"
+                onClick={() => onChangeBudgetPeriod({ ...budgetPeriod, manualFromMs: null })}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-100 min-h-[40px]"
+              >
+                <Undo2 className="w-3.5 h-3.5" aria-hidden="true" />
+                Undo reset
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm !== 'limits') {
+                  setConfirm('limits');
+                  return;
+                }
+                setConfirm(null);
+                onRestoreDefaultLimits();
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors min-h-[40px] ${
+                confirm === 'limits'
+                  ? 'bg-red-600 text-white'
+                  : 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-100'
+              }`}
+            >
+              {confirm === 'limits' ? 'Tap again to restore' : 'Restore default limits'}
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+            Start fresh counts spending only from now until the next reset day. Messages and
+            history are kept (see All History).
+          </p>
         </section>
 
         {/* Monthly Billing Cycle Configuration per Indian Payment Method */}
@@ -517,7 +616,8 @@ export function FinanceView({
                   filteredTxns.slice(0, 60).map((row) => (
                     <tr
                       key={row.smsId}
-                      className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
+                      onClick={() => onOpenThread(row.threadId)}
+                      className="cursor-pointer hover:bg-slate-50 active:bg-slate-100 dark:hover:bg-slate-800/40 dark:active:bg-slate-800/60 transition-colors"
                     >
                       <td className="py-3 px-4 font-mono text-xs tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
                         {formatFullDateTime(row.timestampMs)}
@@ -549,7 +649,7 @@ export function FinanceView({
                         }`}
                       >
                         {row.txn.direction === 'Credit' ? '+' : '-'}
-                        {formatInr(row.txn.amount)}
+                        {formatMoney(row.txn.amount, row.txn.currency)}
                       </td>
                       <td className="py-3 px-4 text-right font-mono text-xs tabular-nums text-slate-600 dark:text-slate-300 whitespace-nowrap">
                         {row.txn.availableBalance !== null

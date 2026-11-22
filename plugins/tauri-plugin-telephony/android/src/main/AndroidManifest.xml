@@ -97,6 +97,32 @@
             android:name="app.snipt.telephony.MmsDownloadReceiver"
             android:exported="false" />
 
+        <!-- Home-screen widgets (not exported beyond the launcher's
+             APPWIDGET_UPDATE broadcast, which the system sends). -->
+        <receiver
+            android:name="app.snipt.telephony.SmsWidgetProvider"
+            android:exported="false"
+            android:label="@string/snipt_widget_sms">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/snipt_widget_sms_info" />
+        </receiver>
+
+        <receiver
+            android:name="app.snipt.telephony.BudgetWidgetProvider"
+            android:exported="false"
+            android:label="@string/snipt_widget_budget">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/snipt_widget_budget_info" />
+        </receiver>
+
         <!-- S15: the platform MmsService writes the downloaded PDU through a
              content URI; MmsServiceBroker grants the phone process access on
              our behalf, so the provider must allow URI grants. Not exported;

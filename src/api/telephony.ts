@@ -105,18 +105,28 @@ export interface ComposeDraft {
   body: string;
 }
 
-/** Draft handed over by another app (SENDTO sms:/smsto:, SEND text). */
+export interface ComposeHandoff {
+  draft: ComposeDraft | null;
+  /** Tab a home-screen widget tap asked for. */
+  tab: 'inbox' | 'finance' | null;
+}
+
+/** Draft handed over by another app (SENDTO sms:/smsto:, SEND text), or a widget tab. */
 export async function takeComposeDraft(
   platform: Capabilities['platform']
-): Promise<ComposeDraft | null> {
-  if (!onAndroid(platform)) return null;
+): Promise<ComposeHandoff> {
+  const none: ComposeHandoff = { draft: null, tab: null };
+  if (!onAndroid(platform)) return none;
   try {
-    const d = await call<{ present: boolean; address: string; body: string }>(
+    const d = await call<{ present: boolean; address: string; body: string; tab?: string }>(
       'plugin:telephony|take_compose'
     );
-    return d.present ? { address: d.address, body: d.body } : null;
+    return {
+      draft: d.present ? { address: d.address, body: d.body } : null,
+      tab: d.tab === 'inbox' || d.tab === 'finance' ? d.tab : null,
+    };
   } catch {
-    return null;
+    return none;
   }
 }
 
@@ -143,4 +153,47 @@ export function onNativeEvents(
     closed = true;
     offs.forEach((u) => u());
   };
+}
+
+/** Status/navigation bar icons: `light` = light app background, dark icons. */
+export async function setSystemBars(
+  platform: Capabilities['platform'],
+  light: boolean
+): Promise<void> {
+  if (!onAndroid(platform)) return;
+  try {
+    await call('plugin:telephony|set_system_bars', { light });
+  } catch {
+    // older shell without the command: icons keep the system default
+  }
+}
+
+/** Home-screen widget snapshot. Built by the UI from masked, OTP-free data. */
+export interface WidgetSnapshot {
+  v: 1;
+  updatedAt: number;
+  previews: boolean;
+  unread: number;
+  latest: Array<{ title: string; body: string; ts: number }>;
+  budget: {
+    label: string;
+    spent: number;
+    limit: number;
+    categories: Array<{ name: string; spent: number; limit: number }>;
+  } | null;
+}
+
+export async function updateWidgets(
+  platform: Capabilities['platform'],
+  snapshot: WidgetSnapshot
+): Promise<boolean> {
+  if (!onAndroid(platform)) return false;
+  try {
+    const r = await call<{ ok: boolean }>('plugin:telephony|update_widgets', {
+      snapshot: JSON.stringify(snapshot),
+    });
+    return r.ok === true;
+  } catch {
+    return false;
+  }
 }

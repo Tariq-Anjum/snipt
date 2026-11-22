@@ -2,6 +2,7 @@ import { call } from './core';
 import type {
   AppSettings,
   BudgetLimits,
+  BudgetPeriod,
   BudgetPlannerSummary,
   CleanupBucketId,
   FinanceSummary,
@@ -22,6 +23,9 @@ export const setCycle = (config: PaymentCycleConfig): Promise<PaymentCycleConfig
 
 export const setBudget = (limits: BudgetLimits): Promise<BudgetLimits> =>
   call('set_budget', { limits });
+
+export const setBudgetPeriod = (period: BudgetPeriod): Promise<BudgetPeriod> =>
+  call('set_budget_period', { period });
 
 export const weeklyScan = (): Promise<WeeklyScanReport> => call('weekly_scan');
 
