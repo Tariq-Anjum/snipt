@@ -405,6 +405,7 @@ export function ThreadPane({
   const [replySim, setReplySim] = useState<0 | 1>(thread.simSlot);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const done = new Set(completedReminderIds);
 
@@ -490,8 +491,11 @@ export function ThreadPane({
     patch(m.sms.id, () => null);
     deleteMessages([m.sms.id])
       .then((r) => {
-        if (r.failedIds.length > 0)
-          setSendError('Could not delete the message from the system SMS store; it is kept. Try again.');
+        setActionError(
+          r.failedIds.length > 0
+            ? 'Could not delete the message from the system SMS store; it is kept. Try again.'
+            : null
+        );
         onChanged();
       })
       .catch(onChanged);
@@ -717,6 +721,14 @@ export function ThreadPane({
         </div>
       </div>
 
+      {actionError && (
+        <p
+          role="alert"
+          className="bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 px-4 md:px-6 py-2 text-[11px] text-red-700 dark:text-red-400"
+        >
+          {actionError}
+        </p>
+      )}
       {caps.canSend ? (
         <form
           onSubmit={handleSend}
