@@ -19,3 +19,39 @@
 - Build failed first: Gradle rust plugin runs `npm run tauri android android-studio-script`, and package.json had no `tauri` script ("Missing script: tauri"). Fix: added `"tauri": "tauri"` to package.json scripts.
 - Java 8 source/target deprecation warnings from template (harmless).
 - `keystore.properties` and `*.jks` are gitignored (gen/android/.gitignore + root .gitignore; verified with git check-ignore).
+
+# S12 / S13 — telephony plugin, JNI path, security polish (2026-11-22)
+
+## What exists
+- `plugins/tauri-plugin-telephony` (Rust + Kotlin library `app.snipt.telephony`). Desktop build: `status` all-false, `send`/role/copy return Unsupported, toggles no-op; the Linux binary stays a read-only viewer (`canSend=false`).
+- `src-tauri/src/jni_bridge.rs`: `NativeCore` JNI surface (init with Keystore DEK, ingest, ingestBatch, queueOutgoing, setSendStatus, markRead, deleteMessage, otpCode, reconcile, emit). Every entry is in `catch_unwind`; failures return null/false; nothing is logged. Window and receivers share one process-wide core (`AppState::shared`: one SQLite connection, one vault). Native events reach the UI as Tauri events (`sms-received`, `sms-changed`, `send-status`, `compose`, `back`).
+- **Pin deviation:** `jni =0.21.1`, not 0.22.4 (ARCHITECTURE §6.3): 0.21.1 is the version Tauri 2.12.7/wry already link on Android (Cargo.lock), so no second JNI crate is built. Licence MIT/Apache-2.0.
+- Manifest (plugin): SMS_DELIVER (BROADCAST_SMS), WAP_PUSH_DELIVER mime `application/vnd.wap.mms-message` (BROADCAST_WAP_PUSH; S15 stub that logs only "MMS not supported"), RESPOND_VIA_MESSAGE service (SEND_RESPOND_VIA_MESSAGE), compose trampoline for SENDTO/VIEW `sms|smsto|mms|mmsto` + SEND text/plain; own status/action receivers `exported=false`. Checked against developer.android.com `android.provider.Telephony` "Creating an SMS app". API levels checked offline in `platforms/android-37.0/data/api-versions.xml` (setRequestedFrameRate/REQUESTED_FRAME_RATE_CATEGORY_HIGH 35, EXTRA_IS_SENSITIVE 33, createForSubscriptionId 31, FLAG_MUTABLE 31, getSlotIndex 29, getCurrentThermalStatus 29, clearPrimaryClip 28).
+- Permissions (aapt2): RECEIVE_SMS, READ_SMS, SEND_SMS, RECEIVE_MMS, RECEIVE_WAP_PUSH, READ_PHONE_STATE (Dual-SIM subscription list), POST_NOTIFICATIONS (+ AndroidX's DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION). **No INTERNET in any build type**; `allowBackup=false`, `fullBackupContent=false`, data-extraction rules exclude everything; `enableOnBackInvokedCallback=true`. Granting the SMS role granted all seven runtime permissions (`GRANTED_BY_ROLE`).
+- `tauri android dev` (live dev server) would need INTERNET: add `<uses-permission android:name="android.permission.INTERNET"/>` in a local, uncommitted `app/src/debug/AndroidManifest.xml` when using it.
+- gradle.properties: `-Xmx2g`, `org.gradle.workers.max=4`; builds ran with `CARGO_BUILD_JOBS=8` (OOM incident).
+
+## Commands (cwd mySMS, `source scripts/env.sh`)
+`npx tauri android build --apk --debug --target x86_64`; `emulator -avd mysms36 -memory 2048 -no-window -no-snapshot -no-audio -gpu swiftshader_indirect`; `adb install -r <apk>`; `adb shell cmd role add-role-holder android.app.role.SMS app.snipt.sms`; `adb emu sms send <from> "<text>"`; notification actions tapped via `cmd statusbar expand-notifications` + `uiautomator dump` + `input tap`; app DB pulled with `adb exec-out run-as app.snipt.sms cat snipt.db{,-wal,-shm}` and queried on the host (only masked facts printed).
+
+## Verified on the emulator (android-36 x86_64, 2026-11-22)
+- Role: `get-role-holders` -> `app.snipt.sms`; UI banner hidden once held (capabilities merge live `status`).
+- Receive with UI open: `content://sms/inbox` row written by Snipt (`_id=1`), app DB row with `provider_id=1`, thread appears live in the inbox (screenshot).
+- Notification: channel `snipt_codes`, `vis=PRIVATE` + public version, 4 actions (Copy code, Reply, Mark read, Delete); text shows `Your OTP is •••••• ...`.
+- Killed process: `am force-stop`, then `sms send` -> process started with no activity (`MainActivity` count 0), provider row `_id=2` + DB row `provider_id=2` (JNI path).
+- Mark read action -> provider `read=1` and DB `is_read=1`. Delete action -> provider row and DB row gone. Reply (RemoteInput) -> provider `type=2 status=0`, DB `send_status=delivered`, original marked read; notification cleared by the timed update.
+- First-run import after `pm clear` + role: `inbox import: inserted=5 skipped=0`, `reconcile: {"deleted":0,"markedRead":2}`.
+- SENDTO `sms:5556` -> draft sheet pre-filled; Send -> provider SENT row, DB `delivered` (UI `queue_outgoing` -> plugin send).
+- FLAG_SECURE: Vault tab -> window `fl=... SECURE ...`, `screencap` all black; back key -> web layer pops to inbox (predictive-back callback + `back` event), SECURE cleared, screenshot normal.
+- Clipboard: Copy code -> `SniptClip: sensitive clip set; wipe in 30 s` at 10:27:22.737, `sensitive clip wiped` at 10:27:52.755.
+- logcat (`-b all`): 0 hits for the OTP `482913` and for every test body; no FATAL/SIGSEGV/panic.
+
+## Not verified / limits
+- Emulator-to-emulator: a second AVD on 5556 booted; Snipt's send showed SENT + delivered, but 5556's `content://sms/inbox` had no row. Cause not established (likely no default SMS app writing the provider on the fresh AVD); stopped there because free RAM fell under 5 GiB. Treat cross-device receive as unverified. Emulator delivery reports are synthetic (a send to 5556 with no receiver running also reported delivered).
+- Clipboard *contents* (and EXTRA_IS_SENSITIVE on the clip) could not be read from the shell (`cmd clipboard` has no shell implementation on this image); only the wipe events are verified. The wipe runs in-process; if the process dies within 30 s, Android's own clipboard auto-clear is the backstop. The "user copied something else" cancel path is untested (cannot set the clipboard from the shell).
+- Provider -> app reconcile for changes made by other apps: covered by a unit test only (`adb shell content delete/update` on `content://sms` is a silent no-op for the shell user).
+- Delivery status: status PendingIntents are FLAG_IMMUTABLE, so the status-report PDU extra is not attached; "delivered" = a status report arrived (report failure codes not distinguished). Multipart: any failed part marks failed (tracked in-process).
+- RESPOND_VIA_MESSAGE service: not exercised (only the phone app holds SEND_RESPOND_VIA_MESSAGE).
+- Dual-SIM (emulator has one SIM), real carrier send/receive and delivery reports, MMS (S15), RCS, OEM background limits, arm64 execution, refresh-rate boost effect (no 90/120 Hz panel; only "no crash" verified), insets on notched/gesture devices beyond the emulator screenshot.
+- Import covers the provider inbox only; existing sent messages in `content://sms/sent` are not imported (the store has no provider-outgoing ingest yet).
+- OTP codes are stored in plaintext in the app-private DB (store design); the Keystore-wrapped DEK protects vault payloads crossing IPC, not the DB at rest (SQLCipher is an open owner decision).
