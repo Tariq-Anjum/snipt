@@ -16,17 +16,27 @@ object NativeCore {
     private const val DB_FILE = "snipt.db"
 
     @Volatile private var ready = false
+    @Volatile private var keyInstalled = false
     private val lock = Any()
 
+    /**
+     * Opens (or joins) the shared core and installs the Keystore-unwrapped
+     * vault key. SMS receipt works as soon as the core is open; the vault
+     * stays not-ready in Rust (vault calls fail, no payloads are issued under
+     * a throwaway key) until the key is installed, and installation is
+     * retried on later calls if the Keystore failed.
+     */
     fun ensure(context: Context): Boolean {
-        if (ready) return true
+        if (ready && keyInstalled) return true
         synchronized(lock) {
-            if (ready) return true
-            try {
-                System.loadLibrary("snipt_lib")
-            } catch (e: UnsatisfiedLinkError) {
-                Log.e(TAG, "native library unavailable")
-                return false
+            if (ready && keyInstalled) return true
+            if (!ready) {
+                try {
+                    System.loadLibrary("snipt_lib")
+                } catch (e: UnsatisfiedLinkError) {
+                    Log.e(TAG, "native library unavailable")
+                    return false
+                }
             }
             val dek: ByteArray? = try {
                 KeystoreWrap.loadOrCreateDek(context)
@@ -35,7 +45,11 @@ object NativeCore {
                 null
             }
             try {
-                ready = init(File(context.dataDir, DB_FILE).absolutePath, dek)
+                val ok = init(File(context.dataDir, DB_FILE).absolutePath, dek)
+                if (ok) {
+                    ready = true
+                    if (dek != null) keyInstalled = true
+                }
             } finally {
                 dek?.fill(0)
             }
@@ -48,10 +62,21 @@ object NativeCore {
     @JvmStatic external fun ingest(json: String): String?
     @JvmStatic external fun ingestBatch(json: String): String?
     @JvmStatic external fun queueOutgoing(json: String): String?
-    @JvmStatic external fun setSendStatus(id: Long, status: String, providerId: Long): Boolean
+    /** Opens a send attempt for a queued message; -1 on failure. */
+    @JvmStatic external fun beginSend(id: Long, parts: Int): Long
+    /** Binds the attempt's provider row (once). */
+    @JvmStatic external fun bindSend(attemptId: Long, providerId: Long): Boolean
+    /** kind: sent|delivery, outcome: ok|failed|unknown -> SendUpdate JSON. */
+    @JvmStatic external fun sendPartResult(attemptId: Long, part: Int, kind: String, outcome: String): String?
+    /** Monotonic failure for a message whose hand-off failed -> SendUpdate JSON. */
+    @JvmStatic external fun failSend(id: Long): String?
+    /** Notification action source check -> {msgId, threadId, providerId?, isRead} or null if stale. */
+    @JvmStatic external fun actionTarget(id: Long, address: String): String?
     @JvmStatic external fun markRead(id: Long): Boolean
     @JvmStatic external fun deleteMessage(id: Long): Boolean
     @JvmStatic external fun otpCode(id: Long): String?
+    /** Local (id, providerId) candidates, captured before the provider query. */
+    @JvmStatic external fun reconcileBegin(): String?
     @JvmStatic external fun reconcile(json: String): String?
     @JvmStatic external fun emit(event: String)
 }

@@ -12,12 +12,12 @@ import android.os.Bundle
 class ComposeTrampolineActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val i = intent
-        val address = i?.data?.let { Recipients.fromUri(it) }
-        val body = i?.getStringExtra(Intent.EXTRA_TEXT)
-            ?: i?.getStringExtra("sms_body")
-            ?: i?.data?.let { Recipients.bodyFromUri(it) }
-        TelephonyPlugin.pendingCompose = TelephonyPlugin.Compose(address ?: "", (body ?: "").take(20_000))
+        val draft = Recipients.draftFrom(intent)
+        if (draft == null) {
+            finish()
+            return
+        }
+        TelephonyPlugin.pendingCompose = TelephonyPlugin.Compose(draft.first.take(128), draft.second.take(20_000))
         packageManager.getLaunchIntentForPackage(packageName)?.let {
             it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             startActivity(it)

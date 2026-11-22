@@ -58,7 +58,7 @@ class SmsDeliverReceiver : BroadcastReceiver() {
             Log.w(TAG, "ingest rejected")
             return
         }
-        Notifier.incoming(ctx, JSONObject(out), providerId, slot)
+        Notifier.incoming(ctx, JSONObject(out), slot)
     }
 
     companion object {

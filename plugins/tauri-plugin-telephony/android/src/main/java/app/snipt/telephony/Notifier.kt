@@ -32,7 +32,7 @@ object Notifier {
     const val ACTION_REPLY = "app.snipt.telephony.REPLY"
 
     const val EXTRA_MSG_ID = "msgId"
-    const val EXTRA_PROVIDER_ID = "providerId"
+    const val EXTRA_ADDRESS = "address"
     const val EXTRA_THREAD_ID = "threadId"
     const val EXTRA_NOTIF_ID = "notifId"
     const val EXTRA_SIM_SLOT = "simSlot"
@@ -54,8 +54,16 @@ object Notifier {
         )
     }
 
-    /** [out] is the JNI ingest result (redacted body, ids, notify flag). */
-    fun incoming(ctx: Context, out: JSONObject, providerId: Long, simSlot: Int) {
+    enum class ReplyState { SENDING, SENT, FAILED }
+
+    /**
+     * [out] is the JNI ingest result (redacted body, ids, sender, notify
+     * flag). Actions carry the message id and its sender; the receiver asks
+     * the core to re-validate both before acting (ids are never reused, so a
+     * deleted message's actions are inert) and takes the provider id from
+     * the core, not from the intent.
+     */
+    fun incoming(ctx: Context, out: JSONObject, simSlot: Int) {
         if (!out.optBoolean("notify") || !canPost(ctx)) return
         channels(ctx)
         val msgId = out.getLong("msgId")
@@ -64,12 +72,13 @@ object Notifier {
         val notifId = (threadId and 0x7FFFFFFF).toInt()
         val title = out.optString("title", "")
         val body = out.optString("body", "")
+        val address = out.optString("address", "")
 
         fun action(action: String, req: Int, mutable: Boolean = false): PendingIntent {
             val i = Intent(ctx, NotificationActionReceiver::class.java)
                 .setAction(action)
                 .putExtra(EXTRA_MSG_ID, msgId)
-                .putExtra(EXTRA_PROVIDER_ID, providerId)
+                .putExtra(EXTRA_ADDRESS, address)
                 .putExtra(EXTRA_THREAD_ID, threadId)
                 .putExtra(EXTRA_NOTIF_ID, notifId)
                 .putExtra(EXTRA_SIM_SLOT, simSlot)
@@ -121,26 +130,40 @@ object Notifier {
     /**
      * After an inline reply. Android 15+ keeps a replied notification alive
      * through a plain cancel (FLAG_LIFETIME_EXTENDED_BY_DIRECT_REPLY), so the
-     * app posts a silent update showing the reply, which times out.
+     * app posts a silent update: "Sending..." when the radio accepted the
+     * request, then "Reply sent" / "Reply not sent" from the sent callback
+     * (never "sent" before it), which times out.
      */
-    fun replied(ctx: Context, notifId: Int, title: String, reply: String, sent: Boolean) {
+    fun replied(ctx: Context, notifId: Int, title: String, reply: String, state: ReplyState) {
         if (!canPost(ctx)) return
         channels(ctx)
+        val text = when (state) {
+            ReplyState.SENDING -> R.string.snipt_reply_sending
+            ReplyState.SENT -> R.string.snipt_reply_sent
+            ReplyState.FAILED -> R.string.snipt_reply_failed
+        }
         val b = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_snipt_stat)
             .setContentTitle(title)
-            .setContentText(ctx.getString(if (sent) R.string.snipt_reply_sent else R.string.snipt_reply_failed))
+            .setContentText(ctx.getString(text))
             .setRemoteInputHistory(arrayOf<CharSequence>(reply))
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setSilent(true)
-            .setAutoCancel(true)
-            .setTimeoutAfter(4_000)
+            .setOnlyAlertOnce(true)
+        if (state == ReplyState.SENDING) {
+            b.setOngoing(false).setTimeoutAfter(120_000)
+        } else {
+            b.setAutoCancel(true).setTimeoutAfter(4_000)
+        }
         try {
             NotificationManagerCompat.from(ctx).notify(notifId, b.build())
         } catch (e: SecurityException) {
             // permission revoked
         }
     }
+
+    /** A stale action (source deleted / not ours): drop its notification. */
+    fun stale(ctx: Context, notifId: Int) = cancel(ctx, notifId)
 
     fun cancel(ctx: Context, notifId: Int) {
         NotificationManagerCompat.from(ctx).cancel(notifId)

@@ -8,7 +8,11 @@
     <string name="snipt_action_copy_otp">Copy code</string>
     <string name="snipt_public_message">New message</string>
     <string name="snipt_public_code">New one-time code</string>
-    <string name="snipt_code_copied">Code copied; clipboard clears in 30 s</string>
+    <string name="snipt_code_copied">Code copied; Snipt clears it in 30 s if it is still there</string>
+    <string name="snipt_reply_sending">Sending reply…</string>
     <string name="snipt_reply_sent">Reply sent</string>
+    <string name="snipt_action_failed">Could not update the system SMS store; try again</string>
+    <string name="snipt_action_stale">That message is no longer available</string>
+    <string name="snipt_copy_failed">Could not copy the code</string>
     <string name="snipt_reply_failed">Reply not sent</string>
 </resources>

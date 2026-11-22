@@ -250,43 +250,57 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
         }.start()
     }
 
+    private fun results(r: List<Pair<Long, Boolean>>): JSObject {
+        val arr = JSArray()
+        for ((id, ok) in r) arr.put(JSObject().put("providerId", id).put("ok", ok))
+        return JSObject().put("results", arr)
+    }
+
+    /** Per-row results (`ok` = verified read / gone); failures are kept by Rust. */
     @Command
     fun providerMarkRead(invoke: Invoke) {
         val a = invoke.parseArgs(ProviderIdsArgs::class.java)
         val ctx = activity.applicationContext
-        Thread {
-            ProviderSync.markRead(ctx, a.providerIds.toList())
-            invoke.resolve(JSObject().put("ok", true))
-        }.start()
+        Thread { invoke.resolve(results(ProviderSync.markRead(ctx, a.providerIds.toList()))) }.start()
     }
 
     @Command
     fun providerDelete(invoke: Invoke) {
         val a = invoke.parseArgs(ProviderIdsArgs::class.java)
         val ctx = activity.applicationContext
-        Thread {
-            ProviderSync.delete(ctx, a.providerIds.toList())
-            invoke.resolve(JSObject().put("ok", true))
-        }.start()
+        Thread { invoke.resolve(results(ProviderSync.delete(ctx, a.providerIds.toList()))) }.start()
     }
 
+    /** Resolves only after the clip is set (the ownership-checked wipe is armed). */
     @Command
     fun copySensitive(invoke: Invoke) {
         val a = invoke.parseArgs(CopyArgs::class.java)
-        SecureClipboard.copy(activity, a.text, a.clearAfterMs ?: SecureClipboard.DEFAULT_CLEAR_MS)
-        invoke.resolve(JSObject().put("ok", true))
+        SecureClipboard.copy(activity, a.text, a.clearAfterMs ?: SecureClipboard.DEFAULT_CLEAR_MS) { ok ->
+            if (ok) invoke.resolve(JSObject().put("ok", true)) else invoke.reject("copy failed")
+        }
     }
 
+    /**
+     * FLAG_SECURE for `vault` (sensitive screen showing) or `global` (user
+     * preference). Resolves after the flag change ran on the UI thread, with
+     * `ok` = the window's actual FLAG_SECURE state read back, so the web UI
+     * enables reveal controls only on a confirmed secure window.
+     */
     @Command
     fun setSecure(invoke: Invoke) {
         val a = invoke.parseArgs(SecureArgs::class.java)
-        if (a.scope == "global") secureGlobal = a.on else secureVault = a.on
-        val on = secureGlobal || secureVault
         activity.runOnUiThread {
-            if (on) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-            else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            if (a.scope == "global") secureGlobal = a.on else secureVault = a.on
+            val on = secureGlobal || secureVault
+            try {
+                if (on) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                val actual = (activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE) != 0
+                invoke.resolve(JSObject().put("ok", actual))
+            } catch (e: Exception) {
+                invoke.reject("could not change the secure flag")
+            }
         }
-        invoke.resolve(JSObject().put("ok", on))
     }
 
     @Command
