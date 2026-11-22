@@ -640,3 +640,43 @@ fn android_vault_is_gated_until_the_keystore_key_is_installed() {
     assert!(!items.is_empty());
     assert!(c.vault_reveal(&items[0].vault).is_ok());
 }
+
+#[test]
+fn restore_with_colliding_ids_keeps_both_histories() {
+    let mut a = Core::new(Store::open_in_memory(330).unwrap());
+    let ra = a
+        .ingest_incoming(&incoming("+15551110000", "from phone A"), None)
+        .unwrap();
+    a.archive(ra.thread.thread_id, true).unwrap();
+    let file = a.backup_create("passphrase-123").unwrap();
+
+    let mut b = Core::new(Store::open_in_memory(330).unwrap());
+    let rb = b
+        .ingest_incoming(&incoming("+15552220000", "phone B own"), None)
+        .unwrap();
+    let (id_a, id_b) = (
+        ra.notification.message.sms.id,
+        rb.notification.message.sms.id,
+    );
+    assert_eq!(id_a, id_b, "both histories allocated the same id");
+
+    let r = b.backup_restore(&file.content, "passphrase-123").unwrap();
+    assert_eq!((r.ingest.inserted, r.ingest.skipped_existing), (1, 0));
+    assert_eq!(r.remapped_messages, 1);
+    assert_eq!(b.store().message_count().unwrap(), 2);
+    let own = b.store().message(id_b).unwrap().unwrap();
+    assert_eq!(own.sms.body, "phone B own");
+    // B's own thread did not inherit A's archive flag.
+    assert!(
+        !b.get_thread(rb.thread.thread_id)
+            .unwrap()
+            .unwrap()
+            .is_archived
+    );
+    // Restoring again changes nothing.
+    let again = b.backup_restore(&file.content, "passphrase-123").unwrap();
+    assert_eq!(
+        (again.ingest.inserted, again.ingest.skipped_existing),
+        (0, 1)
+    );
+}

@@ -223,6 +223,9 @@ pub struct RestoreReport {
     pub ingest: IngestReport,
     pub archived_threads: usize,
     pub blocked_senders: usize,
+    /// Incoming messages kept under a new id (their id was taken by a
+    /// different local message).
+    pub remapped_messages: usize,
 }
 
 /// Platform capabilities for the UI. The Linux build is a read-only backup
@@ -285,6 +288,22 @@ fn page_limit(limit: Option<usize>) -> usize {
 
 fn valid_day(d: f64) -> bool {
     d.is_finite() && (1.0..=31.0).contains(&d)
+}
+
+fn to_json<T: Serialize>(v: &T) -> CmdResult<String> {
+    serde_json::to_string(v).map_err(|_| CmdError("serialise failed".into()))
+}
+
+fn valid_budget(l: &BudgetLimits) -> bool {
+    [
+        l.food_dining,
+        l.transport_travel,
+        l.bills_utilities,
+        l.shopping_retail,
+        l.general_other,
+    ]
+    .iter()
+    .all(|v| v.is_finite() && *v >= 0.0 && *v <= 1e12)
 }
 
 fn check_text(s: &str, max: usize, what: &str) -> CmdResult<()> {
@@ -423,14 +442,7 @@ impl Core {
     }
 
     pub fn set_budget(&mut self, l: BudgetLimits) -> CmdResult<BudgetLimits> {
-        let all = [
-            l.food_dining,
-            l.transport_travel,
-            l.bills_utilities,
-            l.shopping_retail,
-            l.general_other,
-        ];
-        if all.iter().any(|v| !v.is_finite() || *v < 0.0 || *v > 1e12) {
+        if !valid_budget(&l) {
             return Err(CmdError::invalid("budget limit out of range"));
         }
         self.save_setting(KEY_BUDGET, &l)?;
@@ -880,31 +892,30 @@ impl Core {
             return Err(CmdError::invalid("backup too large"));
         }
         let p = sms_crypto::restore_encrypted_backup(content, passphrase)?;
-        let ingest = self.store.ingest_batch(&p.messages)?;
-        let mut archived = 0;
-        for t in &p.archived_thread_ids {
-            self.store.set_archived(*t, true)?;
-            archived += 1;
-        }
-        for s in &p.blocked_senders {
-            if !s.trim().is_empty() {
-                self.store.set_blocked(s, true)?;
-            }
-        }
-        for id in &p.completed_reminder_sms_ids {
-            self.store.set_reminder_done(*id, true)?;
-        }
+        let mut settings: Vec<(&str, String)> = Vec::new();
         if valid_day(p.cycle_config.upi)
             && valid_day(p.cycle_config.credit_card)
             && valid_day(p.cycle_config.savings_account)
         {
-            self.save_setting(KEY_CYCLE, &p.cycle_config)?;
+            settings.push((KEY_CYCLE, to_json(&p.cycle_config)?));
         }
-        self.set_budget(p.budget_limits).ok();
+        if valid_budget(&p.budget_limits) {
+            settings.push((KEY_BUDGET, to_json(&p.budget_limits)?));
+        }
+        // One atomic merge: validated first, id collisions remapped, nothing
+        // written if anything is invalid.
+        let o = self.store.restore_merge(&sms_store::RestoreInput {
+            messages: &p.messages,
+            archived_thread_ids: &p.archived_thread_ids,
+            blocked_senders: &p.blocked_senders,
+            completed_reminder_ids: &p.completed_reminder_sms_ids,
+            settings: &settings,
+        })?;
         Ok(RestoreReport {
-            ingest,
-            archived_threads: archived,
-            blocked_senders: p.blocked_senders.len(),
+            ingest: o.ingest,
+            archived_threads: o.archived_threads,
+            blocked_senders: o.blocked_senders,
+            remapped_messages: o.remapped_messages,
         })
     }
 

@@ -19,6 +19,7 @@ pub mod ingest;
 pub mod migrate;
 pub mod platform;
 pub mod query;
+pub mod restore;
 pub mod schema;
 pub mod search;
 pub mod threads;
@@ -29,6 +30,7 @@ pub use platform::{
     SendStatus, SendUpdate,
 };
 pub use query::MessageCursor;
+pub use restore::{RestoreInput, RestoreOutcome};
 pub use threads::{ThreadCursor, ThreadPage, ThreadRow};
 
 #[derive(Debug, thiserror::Error)]
