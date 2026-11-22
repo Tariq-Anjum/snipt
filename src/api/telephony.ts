@@ -15,32 +15,73 @@ export async function requestDefaultSmsRole(
   return r.held;
 }
 
+export type CopyResult = 'ok' | 'failed' | 'unsupported';
+
 /**
  * Copies a one-time code with EXTRA_IS_SENSITIVE and a native 30 s wipe that
- * is cancelled if the user copies something else. Returns false off Android
- * (the caller falls back to the web clipboard).
+ * clears only this copy's clip (ownership token; best-effort when Android
+ * hides the clipboard). `ok` only after the clip was really set; `failed`
+ * means nothing was copied; `unsupported` off Android (web clipboard path).
  */
 export async function copySensitive(
   platform: Capabilities['platform'],
   text: string
+): Promise<CopyResult> {
+  if (!onAndroid(platform)) return 'unsupported';
+  try {
+    await call('plugin:telephony|copy_sensitive', { text, clearAfterMs: 30_000 });
+    return 'ok';
+  } catch {
+    return 'failed';
+  }
+}
+
+/**
+ * FLAG_SECURE: `vault` while a sensitive screen shows; `global` = user pref.
+ * Resolves to the window's actual secure state read back on the UI thread
+ * (false on failure). Off Android there is no such flag: resolves `false`.
+ */
+export async function setSecure(
+  platform: Capabilities['platform'],
+  scope: 'vault' | 'global',
+  on: boolean
 ): Promise<boolean> {
   if (!onAndroid(platform)) return false;
   try {
-    await call('plugin:telephony|copy_sensitive', { text, clearAfterMs: 30_000 });
-    return true;
+    const r = await call<{ ok: boolean }>('plugin:telephony|set_secure', { scope, on });
+    return r.ok === true;
   } catch {
     return false;
   }
 }
 
-/** FLAG_SECURE: `vault` while a sensitive screen shows; `global` = user pref. */
-export function setSecure(
-  platform: Capabilities['platform'],
-  scope: 'vault' | 'global',
-  on: boolean
-): void {
-  if (!onAndroid(platform)) return;
-  call('plugin:telephony|set_secure', { scope, on }).catch(() => {});
+let vaultHolders = 0;
+
+/**
+ * Holds the `vault` FLAG_SECURE scope for a reveal control. Resolves to a
+ * release function once the native flag is confirmed on (Android), or null
+ * when it could not be confirmed: the caller must keep the code hidden then.
+ * Off Android (Linux desktop: no capture protection exists) it resolves at
+ * once. Reference-counted across the vault tab and thread reveals.
+ */
+export async function acquireVaultSecure(
+  platform: Capabilities['platform']
+): Promise<(() => void) | null> {
+  if (!onAndroid(platform)) return () => {};
+  vaultHolders += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    vaultHolders = Math.max(0, vaultHolders - 1);
+    if (vaultHolders === 0) void setSecure(platform, 'vault', false);
+  };
+  const ok = await setSecure(platform, 'vault', true);
+  if (!ok) {
+    release();
+    return null;
+  }
+  return release;
 }
 
 export interface ComposeDraft {

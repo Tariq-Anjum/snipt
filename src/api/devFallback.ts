@@ -86,9 +86,11 @@ function preview(p: ParsedSms): string {
   return [...text].length <= 140 ? text : `${[...text].slice(0, 139).join('')}…`;
 }
 
-const view = (m: ParsedSms): MessageView => {
+const view = async (m: ParsedSms): Promise<MessageView> => {
   const st = sendStatus.get(m.sms.id);
-  return st ? { ...m, sendStatus: st } : m;
+  const otpVault = m.otp ? await encryptOtpCode(m.otp.code) : undefined;
+  const v: MessageView = { ...redactParsed(m), ...(otpVault ? { otpVault } : {}) };
+  return st ? { ...v, sendStatus: st } : v;
 };
 
 const touch = () => {
@@ -198,7 +200,7 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
       const page = all.slice(start, start + limit);
       const last = page[page.length - 1];
       return {
-        messages: page.map(view),
+        messages: await Promise.all(page.map(view)),
         next:
           start + limit < all.length && last
             ? { tsMs: last.sms.timestampMs, id: last.sms.id }
@@ -243,7 +245,7 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
       const before = state.messages.length;
       state = { ...state, messages: state.messages.filter((m) => !del.has(m.id)) };
       touch();
-      return before - state.messages.length;
+      return { deleted: before - state.messages.length, failedIds: [] };
     }
     case 'finance_summary':
       return computeFinanceSummary(threads(), cycle, Date.now(), a.onlyActiveCycle);
@@ -259,8 +261,18 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
     case 'set_budget':
       limits = { ...limits, ...a.limits };
       return limits;
-    case 'weekly_scan':
-      return runWeeklyUselessScan(state.messages, state.blockedSenders, Date.now());
+    case 'weekly_scan': {
+      const scan = runWeeklyUselessScan(state.messages, state.blockedSenders, Date.now());
+      const byId = new Map(state.messages.map((m) => [m.id, m]));
+      for (const b of scan.buckets) {
+        b.samples = b.samples.map((sm) => {
+          const raw = byId.get(sm.smsId);
+          const otp = raw ? defaultEngine.analyzeMessage(raw).otp : null;
+          return otp ? { ...sm, body: redact(sm.body, otp.code) } : sm;
+        });
+      }
+      return scan;
+    }
     case 'apply_cleanup': {
       const scan = runWeeklyUselessScan(state.messages, state.blockedSenders, Date.now());
       const del = new Set<number>(
@@ -322,7 +334,7 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
       const raw = state.messages[state.messages.length - 1];
       sendStatus.set(raw.id, 'queued');
       return {
-        message: view(defaultEngine.analyzeMessage(raw)),
+        message: await view(defaultEngine.analyzeMessage(raw)),
         thread: rowFor(raw.threadId),
       };
     }
@@ -379,6 +391,7 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
         ingest: { inserted: p.messages.length, skippedExisting: 0, threadsTouched: threads().length },
         archivedThreads: state.archivedThreadIds.length,
         blockedSenders: state.blockedSenders.length,
+        remappedMessages: 0,
       };
     }
     case 'capabilities':

@@ -1,5 +1,6 @@
 import { call } from './core';
 import type {
+  DeleteOutcome,
   IncomingResult,
   IncomingSms,
   MessageCursor,
@@ -17,6 +18,7 @@ export function messagesPage(
   return call('messages_page', { threadId, before, limit });
 }
 
+/** Rejects (message stays unread) when the system SMS store refused the change. */
 export function markRead(smsId: number): Promise<boolean> {
   return call('mark_read', { smsId });
 }
@@ -25,19 +27,20 @@ export function starMessage(smsId: number, starred: boolean): Promise<boolean> {
   return call('star', { smsId, starred });
 }
 
-export function deleteMessages(ids: number[]): Promise<number> {
+/** Per-row result: `failedIds` stay visible (provider delete failed; retry). */
+export function deleteMessages(ids: number[]): Promise<DeleteOutcome> {
   return call('delete_messages', { ids });
 }
 
 /**
- * Store an outgoing SMS as `queued`; the Android telephony plugin sends it and
- * reports `set_send_status`. Rejected where `capabilities().canSend` is false.
+ * Store an outgoing SMS and hand it to the radio (Android); the result carries
+ * the state persisted after the hand-off. Rejected where `canSend` is false.
  */
 export function queueOutgoing(message: OutgoingSms): Promise<OutgoingResult> {
   return call('queue_outgoing', { message });
 }
 
-/** Platform receive path (Android receiver, or the dev simulator). */
+/** Dev simulator only (debug builds); Android receipt is native. */
 export function ingestIncoming(
   message: IncomingSms,
   providerId: number | null = null

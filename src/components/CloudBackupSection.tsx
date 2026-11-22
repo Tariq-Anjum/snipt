@@ -33,6 +33,8 @@ interface CloudBackupSectionProps {
   nativePicker: boolean;
 }
 
+const MAX_BACKUP_FILE_BYTES = 64 * 1024 * 1024;
+
 export function CloudBackupSection({
   preferredProvider,
   onChangeProvider,
@@ -153,6 +155,11 @@ export function CloudBackupSection({
     setStatusMessage(null);
 
     try {
+      // Refuse oversized files before reading them into memory (the core's
+      // own cap applies after IPC; the Android picker uses the same limit).
+      if (file.size > MAX_BACKUP_FILE_BYTES) {
+        throw new Error('Backup file is too large (over 64 MiB).');
+      }
       const text = await file.text();
       const report = await backupRestore(text, passphrase);
       onRestored(report);

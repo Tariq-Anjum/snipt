@@ -17,7 +17,15 @@ import {
   Star,
   Trash2,
 } from 'lucide-react';
-import { memo, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react';
 import {
   archiveThread,
   blockSender,
@@ -25,11 +33,13 @@ import {
   markRead,
   queueOutgoing,
   starMessage,
+  vaultReveal,
   type Capabilities,
   type MessageView,
   type SendStatus,
   type ThreadRow,
 } from '../api';
+import { acquireVaultSecure } from '../api/telephony';
 import { useThreadMessages, useTranslation } from '../hooks/data';
 import { CATEGORY_LIST } from '../engine/types';
 import { formatSenderKindLabel } from '../engine/dlt';
@@ -46,7 +56,7 @@ interface ThreadPaneProps {
   autoTranslateToEnglish: boolean;
   completedReminderIds: number[];
   onToggleReminderDone: (smsId: number) => void;
-  onCopyOtp: (code: string) => void;
+  onCopyOtp: (code: string) => Promise<boolean>;
   onBack: () => void;
   onChanged: () => void;
   onThreadPatched: (patch: Partial<ThreadRow>) => void;
@@ -57,6 +67,7 @@ const SEND_STATUS_LABEL: Record<SendStatus, string> = {
   queued: 'Queued',
   sending: 'Sending...',
   sent: 'Sent',
+  unconfirmed: 'Sent · delivery unconfirmed',
   delivered: 'Delivered',
   failed: 'Not sent',
 };
@@ -67,8 +78,9 @@ interface BubbleProps {
   autoTranslate: boolean;
   isDone: boolean;
   onToggleReminderDone: (smsId: number) => void;
-  onCopyOtp: (code: string) => void;
+  onCopyOtp: (code: string) => Promise<boolean>;
   onStar: (m: MessageView) => void;
+  platform: Capabilities['platform'];
   onDelete: (m: MessageView) => void;
 }
 
@@ -81,13 +93,66 @@ const Bubble = memo(function Bubble({
   onCopyOtp,
   onStar,
   onDelete,
+  platform,
 }: BubbleProps) {
   const { sms, otp, transaction, reminder } = parsed;
   const isOut = sms.isOutgoing;
   const isRcs = sms.protocol === 'RCS';
   const expiresAt = otp ? sms.timestampMs + otp.ttlSeconds * 1000 : 0;
-  const [revealed, setRevealed] = useState(false);
+  // The page carries the OTP masked; the code is decrypted from the vault
+  // payload only on Reveal (after FLAG_SECURE is confirmed) or Copy.
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const releaseSecure = useRef<(() => void) | null>(null);
+  const hideTimer = useRef<number | undefined>(undefined);
   const [copied, setCopied] = useState(false);
+  const hide = useCallback(() => {
+    window.clearTimeout(hideTimer.current);
+    setRevealed(null);
+    releaseSecure.current?.();
+    releaseSecure.current = null;
+  }, []);
+  useEffect(() => hide, [hide]);
+  const reveal = async () => {
+    if (revealed !== null) {
+      hide();
+      return;
+    }
+    setOtpError(null);
+    if (!parsed.otpVault) {
+      setOtpError('The code vault is not ready.');
+      return;
+    }
+    const release = await acquireVaultSecure(platform);
+    if (!release) {
+      setOtpError('Screen protection could not be turned on, so the code stays hidden.');
+      return;
+    }
+    try {
+      const code = await vaultReveal(parsed.otpVault);
+      releaseSecure.current = release;
+      setRevealed(code);
+      hideTimer.current = window.setTimeout(hide, 30_000);
+    } catch {
+      release();
+      setOtpError('Could not decrypt this code.');
+    }
+  };
+  const copyCode = async () => {
+    setOtpError(null);
+    try {
+      const code = revealed ?? (parsed.otpVault ? await vaultReveal(parsed.otpVault) : null);
+      if (code === null) {
+        setOtpError('The code vault is not ready.');
+        return;
+      }
+      if (!(await onCopyOtp(code))) return;
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setOtpError('Could not decrypt this code.');
+    }
+  };
   const [override, setOverride] = useState<boolean | undefined>(undefined);
   const translation = useTranslation(sms.body);
   const needs = translation?.needsTranslation ?? false;
@@ -161,17 +226,17 @@ const Bubble = memo(function Bubble({
                 <span>AES-256 Vault · {formatCountdown(expiresAt, nowMs)}</span>
               </div>
               <div className="mt-0.5 font-mono text-lg font-semibold tracking-wider tabular-nums text-slate-900 dark:text-slate-100">
-                {revealed ? otp.code : '•'.repeat(otp.code.length)}
+                {revealed ?? otp.code}
               </div>
             </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setRevealed((v) => !v)}
-                aria-label={revealed ? `Hide OTP ${sms.id}` : `Reveal OTP ${sms.id}`}
+                onClick={() => void reveal()}
+                aria-label={revealed !== null ? `Hide OTP ${sms.id}` : `Reveal OTP ${sms.id}`}
                 className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg transition-colors"
               >
-                {revealed ? (
+                {revealed !== null ? (
                   <>
                     <EyeOff className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>Hide</span>
@@ -185,11 +250,7 @@ const Bubble = memo(function Bubble({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  onCopyOtp(otp.code);
-                  setCopied(true);
-                  window.setTimeout(() => setCopied(false), 1800);
-                }}
+                onClick={() => void copyCode()}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 dark:bg-blue-600 dark:hover:bg-blue-500 rounded-lg transition-colors"
               >
                 {copied ? (
@@ -205,6 +266,11 @@ const Bubble = memo(function Bubble({
                 )}
               </button>
             </div>
+            {otpError && (
+              <p role="alert" className="w-full text-[11px] text-red-700 dark:text-red-300">
+                {otpError}
+              </p>
+            )}
           </div>
         )}
 
@@ -370,17 +436,24 @@ export function ThreadPane({
     }
   }, [messages, prepended, virt]);
 
-  // Mark loaded incoming messages read once, then refresh the lists.
+  // Mark loaded incoming messages read once, then refresh the lists. A
+  // message the system SMS store refused stays unread and is not retried in
+  // this view (no refresh loop); reopening the thread retries it.
+  const markTried = useRef(new Set<number>());
   useEffect(() => {
-    const unread = messages.filter((m) => !m.sms.isOutgoing && !m.sms.isRead);
+    const unread = messages.filter(
+      (m) => !m.sms.isOutgoing && !m.sms.isRead && !markTried.current.has(m.sms.id)
+    );
     if (unread.length === 0) return;
     let live = true;
     (async () => {
+      let changed = false;
       for (const m of unread) {
-        await markRead(m.sms.id).catch(() => {});
+        markTried.current.add(m.sms.id);
+        changed = (await markRead(m.sms.id).then(() => true).catch(() => false)) || changed;
         if (!live) return;
       }
-      onChanged();
+      if (changed) onChanged();
     })();
     return () => {
       live = false;
@@ -415,7 +488,13 @@ export function ThreadPane({
 
   const handleDelete = (m: MessageView) => {
     patch(m.sms.id, () => null);
-    deleteMessages([m.sms.id]).then(onChanged).catch(onChanged);
+    deleteMessages([m.sms.id])
+      .then((r) => {
+        if (r.failedIds.length > 0)
+          setSendError('Could not delete the message from the system SMS store; it is kept. Try again.');
+        onChanged();
+      })
+      .catch(onChanged);
   };
 
   const toggleArchive = () => {
@@ -630,6 +709,7 @@ export function ThreadPane({
                   onCopyOtp={onCopyOtp}
                   onStar={handleStar}
                   onDelete={handleDelete}
+                  platform={caps.platform}
                 />
               </div>
             );

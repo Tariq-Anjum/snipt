@@ -3,6 +3,7 @@ import {
   Database,
   Droplets,
   Languages,
+  ShieldCheck,
   Moon,
   Search,
   Sun,
@@ -37,7 +38,7 @@ interface InboxViewProps {
   onChanged: () => void;
   counts: InboxCounts | null;
   caps: Capabilities;
-  onCopyOtp: (code: string) => void;
+  onCopyOtp: (code: string) => Promise<boolean>;
   completedReminderIds: number[];
   onToggleReminderDone: (smsId: number) => void;
   theme: 'light' | 'dark';
@@ -47,6 +48,9 @@ interface InboxViewProps {
   onChangeDesignStyle: (style: DesignStyle) => void;
   autoTranslateToEnglish: boolean;
   onToggleAutoTranslate: () => void;
+  /** Android only (undefined hides the control): FLAG_SECURE on every screen. */
+  secureScreen?: boolean;
+  onToggleSecureScreen: () => void;
   onLoadSample?: () => void;
   isLoadingSample: boolean;
   onGoToBackup: () => void;
@@ -280,6 +284,8 @@ export function InboxView({
   onChangeDesignStyle,
   autoTranslateToEnglish,
   onToggleAutoTranslate,
+  secureScreen,
+  onToggleSecureScreen,
   onLoadSample,
   isLoadingSample,
   onGoToBackup,
@@ -462,6 +468,35 @@ export function InboxView({
               Offline · Hindi, Urdu, Hinglish, Marathi, Tamil, Telugu, Bengali
             </p>
           </div>
+
+          {secureScreen !== undefined && (
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-1">
+              <div className="px-1 flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                  Block screenshots
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={secureScreen}
+                  aria-label="Block screenshots and screen recording on every Snipt screen"
+                  onClick={onToggleSecureScreen}
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                    secureScreen ? 'bg-blue-700 dark:bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                      secureScreen ? 'translate-x-4.5' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+              <p className="px-1 text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                The code vault is always protected
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="pt-3 mt-3 border-t border-slate-100 dark:border-slate-800 space-y-2">
@@ -632,6 +667,23 @@ export function InboxView({
                 <Languages className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>EN</span>
               </button>
+
+              {secureScreen !== undefined && (
+                <button
+                  type="button"
+                  onClick={onToggleSecureScreen}
+                  aria-pressed={secureScreen}
+                  aria-label="Block screenshots on every Snipt screen"
+                  className={`min-h-[36px] px-2.5 inline-flex items-center gap-1 text-[11px] font-semibold rounded-lg transition-colors ${
+                    secureScreen
+                      ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
+                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                  }`}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Secure</span>
+                </button>
+              )}
 
               <button
                 type="button"

@@ -85,10 +85,23 @@ export interface ThreadPage {
   next: ThreadCursor | null;
 }
 
-export type SendStatus = 'queued' | 'sending' | 'sent' | 'delivered' | 'failed';
+export type SendStatus = 'queued' | 'sending' | 'sent' | 'unconfirmed' | 'delivered' | 'failed';
 
-/** A stored message; outgoing messages queued by Snipt carry a send state. */
-export type MessageView = ParsedSms & { sendStatus?: SendStatus };
+/**
+ * A stored message; outgoing messages queued by Snipt carry a send state.
+ * The OTP is masked in `sms.body` and `otp.code`; `otpVault` holds the code
+ * encrypted (reveal with `vault_reveal`).
+ */
+export type MessageView = ParsedSms & {
+  sendStatus?: SendStatus;
+  otpVault?: EncryptedOtpPayload;
+};
+
+/** `delete_messages`: rows whose provider row could not be deleted are kept. */
+export interface DeleteOutcome {
+  deleted: number;
+  failedIds: number[];
+}
 
 export interface MessagesPage {
   messages: MessageView[];
@@ -116,6 +129,8 @@ export interface RestoreReport {
   ingest: IngestReport;
   archivedThreads: number;
   blockedSenders: number;
+  /** Incoming messages kept under a new id (their id was taken locally). */
+  remappedMessages: number;
 }
 
 export interface Capabilities {
@@ -192,9 +207,12 @@ export interface IncomingResult {
 
 export interface OutgoingSms {
   threadId?: number;
+  /** With threadId: the expected recipient (mismatch is rejected). */
   address?: string;
   body: string;
   simSlot: 0 | 1;
+  /** Reply to this message; it must still exist in threadId. */
+  replyTo?: number;
 }
 
 export interface OutgoingResult {

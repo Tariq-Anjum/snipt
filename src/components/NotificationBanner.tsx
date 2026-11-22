@@ -8,7 +8,7 @@ interface NotificationBannerProps {
   notification: NotificationPayload | null;
   onDismiss: () => void;
   onOpenThread: (threadId: number) => void;
-  onCopyOtp: (code: string) => void;
+  onCopyOtp: (code: string) => Promise<boolean>;
   onMarkRead: (smsId: number) => void;
   onDeleteSms: (smsId: number) => void;
   /** Absent where the platform cannot send (Linux): the Reply action is hidden. */
@@ -37,7 +37,7 @@ export function NotificationBanner({
   const handleCopy = async () => {
     if (!notification?.otpVault) return;
     try {
-      onCopyOtp(await vaultReveal(notification.otpVault));
+      if (!(await onCopyOtp(await vaultReveal(notification.otpVault)))) return;
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
     } catch {

@@ -38,8 +38,10 @@ interface RemindersViewProps {
   onChangeScanScheduleDay: (day: string) => void;
   onApplyCleanup: (buckets: CleanupBucketId[]) => Promise<number>;
   onPurgeExpiredOtps: () => Promise<number>;
-  onCopyOtp: (code: string) => void;
+  onCopyOtp: (code: string) => Promise<boolean>;
   clipboardClearSecondsLeft: number | null;
+  /** True once FLAG_SECURE is confirmed on (Android); reveal stays disabled until then. */
+  revealEnabled: boolean;
   onToggleReminderDone: (smsId: number) => void;
   onOpenThread: (threadId: number) => void;
   nowMs: number;
@@ -78,6 +80,7 @@ export function RemindersView({
   onPurgeExpiredOtps,
   onCopyOtp,
   clipboardClearSecondsLeft,
+  revealEnabled,
   onToggleReminderDone,
   onOpenThread,
   nowMs,
@@ -141,6 +144,7 @@ export function RemindersView({
       hide(id);
       return;
     }
+    if (!revealEnabled) return;
     try {
       const code = await vaultReveal(view.vault);
       setRevealed((prev) => ({ ...prev, [id]: code }));
@@ -153,7 +157,7 @@ export function RemindersView({
   const handleCopy = async (view: OtpItemView) => {
     try {
       const code = revealed[view.item.smsId] ?? (await vaultReveal(view.vault));
-      onCopyOtp(code);
+      if (!(await onCopyOtp(code))) return;
       setCopiedId(view.item.smsId);
       window.setTimeout(() => setCopiedId(null), 1800);
     } catch {
@@ -343,7 +347,7 @@ export function RemindersView({
               {clipboardClearSecondsLeft !== null && (
                 <span className="text-xs font-mono tabular-nums text-blue-700 dark:text-blue-400 flex items-center gap-1">
                   <ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Clipboard clears in {clipboardClearSecondsLeft}s</span>
+                  <span>Clipboard clears in {clipboardClearSecondsLeft}s if unchanged</span>
                 </span>
               )}
 
@@ -418,12 +422,13 @@ export function RemindersView({
                       <button
                         type="button"
                         onClick={() => void toggleReveal(view)}
+                        disabled={!isRevealed && !revealEnabled}
                         aria-label={
                           isRevealed
                             ? `Hide OTP from ${item.sender}`
                             : `Reveal OTP from ${item.sender}`
                         }
-                        className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 bg-slate-100 dark:bg-slate-800 rounded-lg"
+                        className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 bg-slate-100 dark:bg-slate-800 rounded-lg disabled:opacity-45 disabled:cursor-not-allowed"
                       >
                         {isRevealed ? (
                           <EyeOff className="w-4 h-4" aria-hidden="true" />

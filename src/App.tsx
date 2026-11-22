@@ -46,6 +46,7 @@ import {
 } from './api';
 import { devImportSeed } from './api/dev';
 import {
+  acquireVaultSecure,
   copySensitive,
   onNativeEvents,
   requestDefaultSmsRole,
@@ -86,6 +87,8 @@ interface Prefs {
   autoTranslateToEnglish: boolean;
   preferredCloudProvider: CloudBackupProvider;
   lastBackupAtMs: number | null;
+  /** Android: FLAG_SECURE on every screen (S13 global option). */
+  secureScreen: boolean;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -93,6 +96,7 @@ const DEFAULT_PREFS: Prefs = {
   autoTranslateToEnglish: true,
   preferredCloudProvider: 'device_picker',
   lastBackupAtMs: null,
+  secureScreen: false,
 };
 
 function loadPrefs(): Prefs {
@@ -106,6 +110,7 @@ function loadPrefs(): Prefs {
         autoTranslateToEnglish: p.autoTranslateToEnglish ?? DEFAULT_PREFS.autoTranslateToEnglish,
         preferredCloudProvider: p.preferredCloudProvider ?? DEFAULT_PREFS.preferredCloudProvider,
         lastBackupAtMs: p.lastBackupAtMs ?? DEFAULT_PREFS.lastBackupAtMs,
+        secureScreen: p.secureScreen === true,
       };
     }
   } catch {
@@ -210,10 +215,36 @@ export default function App() {
     });
   }, [platform, bump]);
 
-  // FLAG_SECURE while the OTP vault screen is showing.
+  // FLAG_SECURE while the OTP vault screen is showing. Its reveal controls
+  // stay disabled until the native flag is confirmed (vaultSecure).
+  const [vaultSecure, setVaultSecure] = useState(false);
   useEffect(() => {
-    setSecure(platform, 'vault', activeTab === 'reminders');
+    setVaultSecure(false);
+    if (activeTab !== 'reminders') return;
+    let release: (() => void) | null = null;
+    let live = true;
+    acquireVaultSecure(platform).then((r) => {
+      if (!live) {
+        r?.();
+        return;
+      }
+      release = r;
+      setVaultSecure(r !== null);
+      if (r === null) setNotice('Screen protection could not be turned on, so codes stay hidden.');
+    });
+    return () => {
+      live = false;
+      release?.();
+    };
   }, [platform, activeTab]);
+
+  // Global FLAG_SECURE preference (Android); re-applied on start.
+  useEffect(() => {
+    if (platform !== 'android') return;
+    setSecure(platform, 'global', prefs.secureScreen).then((on) => {
+      if (prefs.secureScreen && !on) setNotice('Screenshot blocking could not be turned on.');
+    });
+  }, [platform, prefs.secureScreen]);
 
   const handleRequestRole = async () => {
     try {
@@ -307,12 +338,28 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  // 30-second OTP clipboard auto-clear countdown
+  // 30-second OTP clipboard auto-clear countdown. It starts only after a
+  // successful copy. Android wipes natively (ownership-token checked). The
+  // web/Linux path clears only if the clipboard still holds exactly the code
+  // this copy wrote; if the clipboard cannot be read back, it is left alone
+  // and the user is told the wipe was best-effort.
+  const webClip = useRef<string | null>(null);
   useEffect(() => {
     if (clipboardClearSecondsLeft === null) return;
     if (clipboardClearSecondsLeft <= 0) {
-      if (platform !== 'android') navigator.clipboard?.writeText('').catch(() => {});
+      const ours = webClip.current;
+      webClip.current = null;
       setClipboardClearSecondsLeft(null);
+      if (ours !== null) {
+        const clip = navigator.clipboard;
+        (clip?.readText ? clip.readText() : Promise.reject(new Error('unreadable')))
+          .then((now) => (now === ours ? clip.writeText('') : undefined))
+          .catch(() =>
+            setNotice(
+              'Snipt could not check the clipboard, so it left it alone. Clear it yourself if the code is still there.'
+            )
+          );
+      }
       return;
     }
     const id = window.setTimeout(
@@ -320,7 +367,7 @@ export default function App() {
       1000
     );
     return () => window.clearTimeout(id);
-  }, [clipboardClearSecondsLeft, platform]);
+  }, [clipboardClearSecondsLeft]);
 
   // ---- data -----------------------------------------------------------------
   // Billing cycles are owned by the core.
@@ -422,14 +469,45 @@ export default function App() {
     bump();
   };
 
-  const handleCopyOtp = (code: string) => {
-    // Android: native sensitive clip + cancel-safe 30 s wipe; the countdown
-    // below is display-only there (its web clipboard write is skipped).
-    copySensitive(platform, code).then((native) => {
-      if (!native) navigator.clipboard?.writeText(code).catch(() => {});
-    });
+  /** Resolves true only when the code really reached the clipboard. */
+  const handleCopyOtp = async (code: string): Promise<boolean> => {
+    const native = await copySensitive(platform, code);
+    if (native === 'ok') {
+      webClip.current = null;
+      setClipboardClearSecondsLeft(30);
+      return true;
+    }
+    if (native === 'failed') {
+      setNotice('Could not copy the code.');
+      return false;
+    }
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch {
+      setNotice('Could not copy the code.');
+      return false;
+    }
+    webClip.current = code;
     setClipboardClearSecondsLeft(30);
+    return true;
   };
+
+  const handleMarkRead = (id: number) =>
+    markRead(id)
+      .then(bump)
+      .catch((e: unknown) => {
+        setNotice(e instanceof Error ? e.message : String(e));
+        bump();
+      });
+
+  const handleDeleteOne = (id: number) =>
+    deleteMessages([id])
+      .then((r) => {
+        if (r.failedIds.length > 0)
+          setNotice('Could not delete the message from the system SMS store; it is kept. Try again.');
+        bump();
+      })
+      .catch(bump);
 
   const handleApplyCleanup = async (buckets: CleanupBucketId[]): Promise<number> => {
     const removed = await applyCleanup(buckets);
@@ -576,6 +654,8 @@ export default function App() {
                 onToggleAutoTranslate={() =>
                   patchPrefs({ autoTranslateToEnglish: !prefs.autoTranslateToEnglish })
                 }
+                secureScreen={platform === 'android' ? prefs.secureScreen : undefined}
+                onToggleSecureScreen={() => patchPrefs({ secureScreen: !prefs.secureScreen })}
                 onLoadSample={import.meta.env.DEV ? handleLoadSample : undefined}
                 isLoadingSample={isLoadingSample}
                 onGoToBackup={() => setActiveTab('reminders')}
@@ -627,6 +707,7 @@ export default function App() {
                 onPurgeExpiredOtps={handlePurgeExpiredOtps}
                 onCopyOtp={handleCopyOtp}
                 clipboardClearSecondsLeft={clipboardClearSecondsLeft}
+                revealEnabled={vaultSecure}
                 onToggleReminderDone={handleToggleReminderDone}
                 onOpenThread={handleJumpToThread}
                 nowMs={nowMs}
@@ -649,8 +730,8 @@ export default function App() {
             onDismiss={() => setLatestNotification(null)}
             onOpenThread={handleJumpToThread}
             onCopyOtp={handleCopyOtp}
-            onMarkRead={(id) => markRead(id).then(bump).catch(() => {})}
-            onDeleteSms={(id) => deleteMessages([id]).then(bump).catch(() => {})}
+            onMarkRead={handleMarkRead}
+            onDeleteSms={handleDeleteOne}
             onQuickReply={caps.canSend ? handleQuickReply : undefined}
           />
 
