@@ -1,4 +1,4 @@
-//! Shared serde types for mySMS.
+//! Shared serde types for Snipt.
 //!
 //! JSON shape is identical to `src/engine/types.ts` (camelCase keys, optional
 //! fields omitted when absent, nullable fields serialised as `null`). Field

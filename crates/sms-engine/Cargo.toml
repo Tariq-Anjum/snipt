@@ -1,6 +1,6 @@
 [package]
 name = "sms-engine"
-description = "mySMS classification engine: 1:1 port of src/engine (TS oracle)."
+description = "Snipt classification engine: 1:1 port of src/engine (TS oracle)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

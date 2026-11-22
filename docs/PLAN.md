@@ -24,7 +24,7 @@ Steps: remove `@google/genai`, `express`, `dotenv`, `@types/express` (unused [F 
 Accept: TS oracle 10/10 green; build passes; no network URLs in index.html.
 Verify:
 ```bash
-cd /mnt/MD/AI-tools/mySMS && TZ=Asia/Kolkata npx tsx --test src/engine/engine.test.ts
+cd /mnt/MD/AI-tools/snipt && TZ=Asia/Kolkata npx tsx --test src/engine/engine.test.ts
 npm run lint && npm run build && ls web-dist/index.html
 grep -rn "genai\|googleapis\|express" package.json index.html src || echo CLEAN
 ```
@@ -84,7 +84,7 @@ cd /mnt/MD/AI-tools/android-sdk
 curl -fLO https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip
 echo "e025545c62a8e64c7559119566a569fb1dec5f60  commandlinetools-linux-16111833_latest.zip" | sha1sum -c
 unzip -q commandlinetools-linux-16111833_latest.zip -d cmdline-tools && mv cmdline-tools/cmdline-tools cmdline-tools/latest
-source /mnt/MD/AI-tools/mySMS/scripts/env.sh
+source /mnt/MD/AI-tools/snipt/scripts/env.sh
 # OWNER GATE: Android SDK licence acceptance is the owner's legal act — owner runs:  ! bash -c 'source .../env.sh; sdkmanager --licenses'
 sdkmanager --install "platform-tools" "platforms;android-37.0" "build-tools;37.0.0" "ndk;29.0.14206865" "emulator" "system-images;android-36;google_apis_ps16k;x86_64"
 rustup target add aarch64-linux-android x86_64-linux-android   # aarch64 already present [F]

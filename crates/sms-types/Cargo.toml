@@ -1,6 +1,6 @@
 [package]
 name = "sms-types"
-description = "Serde types for mySMS; JSON shape equals src/engine/types.ts (camelCase)."
+description = "Serde types for Snipt; JSON shape equals src/engine/types.ts (camelCase)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -35,7 +35,7 @@ Plus optionals (retry UI when capabilities fail, MMS temp-file cleanup, "some pa
 2. MMS: ship as-is (receive only, retry on app open, text-only backups) or add background retry/backups with attachments?
 3. SQLCipher at rest for the SMS database (OTPs are plaintext inside the app-private DB; vault key is Keystore-wrapped)?
 4. Trademark/Play-name check for "Snipt" and rename of the GitHub repo (yours to run).
-5. Push: nothing has been pushed. Local commits only in `/mnt/MD/AI-tools/mySMS` (and one in `/mnt/MD/AI-tools/batisseur`, 0.3.0 with the `phone` form factor and `android-phone` pack).
+5. Push: nothing has been pushed. Local commits only in `/mnt/MD/AI-tools/snipt` (and one in `/mnt/MD/AI-tools/batisseur`, 0.3.0 with the `phone` form factor and `android-phone` pack).
 
 ## Incident
 Mid-run the session was killed by a kernel OOM (a 10 GB `script` process in the terminal that hosts herdr). Not a herdr bug; details and mitigations in `docs/INCIDENT-20261122-OOM.md`.

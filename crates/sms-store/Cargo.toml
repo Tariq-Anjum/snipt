@@ -1,6 +1,6 @@
 [package]
 name = "sms-store"
-description = "mySMS SQLite store (bundled SQLite, FTS5 trigram), incremental threads, keyset paging, finance queries."
+description = "Snipt SQLite store (bundled SQLite, FTS5 trigram), incremental threads, keyset paging, finance queries."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

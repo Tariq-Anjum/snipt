@@ -1,4 +1,4 @@
-//! mySMS SQLite store: bundled SQLite (same engine on Android and Linux),
+//! Snipt SQLite store: bundled SQLite (same engine on Android and Linux),
 //! FTS5 trigram search, incrementally maintained `threads` table whose rules
 //! equal store.ts `buildThreads`, keyset paging, finance queries.
 //!

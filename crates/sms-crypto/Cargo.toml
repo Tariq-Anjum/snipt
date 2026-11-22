@@ -1,6 +1,6 @@
 [package]
 name = "sms-crypto"
-description = "mySMS .mysms.enc backup (PBKDF2-SHA256 + AES-256-GCM, v1-compatible with the TS prototype) and OTP vault."
+description = "Snipt .mysms.enc backup (PBKDF2-SHA256 + AES-256-GCM, v1-compatible with the TS prototype) and OTP vault."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

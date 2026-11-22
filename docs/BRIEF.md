@@ -20,7 +20,7 @@ Rust 1.98.1 (rustup), node, npm, herdr, codex installed. NO Java/JDK, Gradle, An
 Install user-scoped under `/mnt/MD/AI-tools/android-sdk`, `/mnt/MD/AI-tools/jdk` (Rust Android targets via rustup are fine). Owner pre-approved bash/sudo, but prefer rootless, reversible, no system-wide changes.
 
 ## Hard rules (owner AGENTS.md)
-- Work only in `/mnt/MD/AI-tools/mySMS` (+ android-sdk/jdk dirs + batisseur extension below). Do NOT touch ZHOOR-AIOS, my-ai-brain, OB1, live `skills/`, tisserand/repo.
+- Work only in `/mnt/MD/AI-tools/snipt` (+ android-sdk/jdk dirs + batisseur extension below). Do NOT touch ZHOOR-AIOS, my-ai-brain, OB1, live `skills/`, tisserand/repo.
 - No pushes, no repo creation, no registry/OB1 writes (owner-run only). Local commits OK.
 - Never print/commit secrets. A Gemini key was pasted earlier in chat: it is NOT used anywhere in this project; do not add it.
 - Evidence over claims: report exact commands run + results. Nothing "done" without verification.
