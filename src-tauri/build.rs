@@ -13,6 +13,7 @@ const COMMANDS: &[&str] = &[
     "block",
     "delete_messages",
     "get_thread",
+    "mms_image",
     "inbox_counts",
     "reminders",
     "set_reminder_done",

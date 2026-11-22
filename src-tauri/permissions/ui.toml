@@ -17,6 +17,7 @@ permissions = [
   "allow-block",
   "allow-delete-messages",
   "allow-get-thread",
+  "allow-mms-image",
   "allow-inbox-counts",
   "allow-reminders",
   "allow-set-reminder-done",

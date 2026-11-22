@@ -23,7 +23,7 @@ pub struct Status {
     pub sim_slots: u8,
     #[serde(default)]
     pub subscriptions: Vec<Subscription>,
-    /// MMS download is S15; false until then.
+    /// MMS receive available (S15: default-SMS role + RECEIVE_MMS).
     pub mms: bool,
     /// POST_NOTIFICATIONS granted (always true below API 33).
     pub notifications: bool,
@@ -94,6 +94,9 @@ pub struct PowerState {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderIds {
     pub provider_ids: Vec<i64>,
+    /// Ids are `content://mms` rows (S15) instead of `content://sms`.
+    #[serde(default)]
+    pub mms: bool,
 }
 
 /// Outcome of one provider row write (`ok` = verified changed/gone).

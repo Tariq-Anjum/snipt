@@ -20,6 +20,9 @@ use sms_types::{BudgetLimits, FinanceSummary, ParsedSms, PaymentCycleConfig};
 
 use crate::error::{CmdError, CmdResult};
 
+mod mms;
+pub use mms::{MmsImage, MmsIngestOut, MmsNoticeOut, MmsRetrieved};
+
 /// Upper bounds on untrusted frontend input.
 pub const MAX_QUERY_CHARS: usize = 256;
 pub const MAX_IDS: usize = 20_000;
@@ -120,6 +123,9 @@ pub struct MessageView {
     /// is only here, encrypted (decrypt with `vault_reveal`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub otp_vault: Option<EncryptedOtpPayload>,
+    /// MMS attachments (metadata only; image bytes via `mms_image`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<sms_store::AttachmentMeta>,
 }
 
 impl std::ops::Deref for MessageView {
@@ -205,6 +211,9 @@ pub struct ActionTarget {
     pub msg_id: i64,
     pub thread_id: i64,
     pub provider_id: Option<i64>,
+    /// `content://mms` row of an MMS (separate id namespace).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mms_id: Option<i64>,
     pub is_read: bool,
 }
 
@@ -487,6 +496,8 @@ impl Core {
             .collect();
         let status: std::collections::HashMap<i64, SendStatus> =
             self.store.send_statuses(&outgoing)?.into_iter().collect();
+        let ids: Vec<i64> = messages.iter().map(|m| m.sms.id).collect();
+        let mut attachments = self.store.mms_attachments(&ids)?;
         Ok(messages
             .into_iter()
             .map(|mut parsed| {
@@ -499,6 +510,7 @@ impl Core {
                 MessageView {
                     send_status: status.get(&parsed.sms.id).copied(),
                     otp_vault,
+                    attachments: attachments.remove(&parsed.sms.id).unwrap_or_default(),
                     parsed,
                 }
             })
@@ -584,13 +596,24 @@ impl Core {
         let (raw, inserted) = self
             .store
             .ingest_from_provider(input, provider_id, now_ms())?;
+        self.incoming_result(raw.id, raw.thread_id, inserted)
+    }
+
+    /// Notification payload + thread for a stored incoming message (SMS or
+    /// MMS): OTP masked in the body, code only in the vault payload.
+    pub(crate) fn incoming_result(
+        &self,
+        msg_id: i64,
+        thread_id: i64,
+        inserted: bool,
+    ) -> CmdResult<IncomingResult> {
         let thread = self
             .store
-            .thread(raw.thread_id)?
+            .thread(thread_id)?
             .ok_or_else(|| CmdError("thread missing after ingest".into()))?;
         let mut message = self
             .store
-            .message(raw.id)?
+            .message(msg_id)?
             .ok_or_else(|| CmdError("message missing after ingest".into()))?;
         let otp_vault = message
             .otp
@@ -642,6 +665,7 @@ impl Core {
                 parsed,
                 send_status: Some(SendStatus::Queued),
                 otp_vault: None,
+                attachments: Vec::new(),
             },
             thread,
         })
@@ -703,10 +727,16 @@ impl Core {
             .provider_refs(&[sms_id])?
             .first()
             .map(|r| r.provider_id);
+        let mms_id = self
+            .store
+            .mms_refs(&[sms_id])?
+            .first()
+            .map(|r| r.provider_id);
         Ok(Some(ActionTarget {
             msg_id: sms_id,
             thread_id: m.sms.thread_id,
             provider_id,
+            mms_id,
             is_read: m.sms.is_read.unwrap_or(false),
         }))
     }

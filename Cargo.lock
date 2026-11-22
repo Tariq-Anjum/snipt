@@ -3301,6 +3301,7 @@ dependencies = [
 name = "snipt"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "jni",
  "rusqlite",
@@ -3308,6 +3309,7 @@ dependencies = [
  "serde_json",
  "sms-crypto",
  "sms-engine",
+ "sms-mms",
  "sms-store",
  "sms-testdata",
  "sms-types",

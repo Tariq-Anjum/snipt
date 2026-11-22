@@ -78,9 +78,20 @@ async fn native<R: Runtime, T: Send + 'static>(
 /// Provider rows (Android default-SMS app) changed successfully by a native
 /// mark-read / delete call. Any failure (role lost, provider write refused,
 /// IPC error) leaves the id out, so its local row stays as it was.
-async fn provider_ok<R: Runtime>(app: &AppHandle<R>, ids: Vec<i64>, delete: bool) -> HashSet<i64> {
+async fn provider_ok<R: Runtime>(
+    app: &AppHandle<R>,
+    ids: Vec<i64>,
+    mms: bool,
+    delete: bool,
+) -> HashSet<i64> {
+    if ids.is_empty() {
+        return HashSet::new();
+    }
     let res = native(app, move |a| {
-        let req = ProviderIds { provider_ids: ids };
+        let req = ProviderIds {
+            provider_ids: ids,
+            mms,
+        };
         if delete {
             a.telephony().provider_delete(req)
         } else {
@@ -109,14 +120,18 @@ pub async fn mark_read<R: Runtime>(
     state: State<'_, AppState>,
     sms_id: i64,
 ) -> CmdResult<bool> {
-    let refs = state.run(move |c| c.provider_refs(&[sms_id])).await?;
-    if cfg!(target_os = "android") && !refs.is_empty() {
-        let want: Vec<i64> = refs.iter().map(|r| r.provider_id).collect();
-        let ok = provider_ok(&app, want.clone(), false).await;
-        if !want.iter().all(|p| ok.contains(p)) {
-            return Err(CmdError(
-                "Could not mark the message read in the system SMS store; try again.".into(),
-            ));
+    let (sms, mms) = state
+        .run(move |c| Ok((c.provider_refs(&[sms_id])?, c.mms_refs(&[sms_id])?)))
+        .await?;
+    if cfg!(target_os = "android") {
+        for (refs, is_mms) in [(sms, false), (mms, true)] {
+            let want: Vec<i64> = refs.iter().map(|r| r.provider_id).collect();
+            let ok = provider_ok(&app, want.clone(), is_mms, false).await;
+            if !want.iter().all(|p| ok.contains(p)) {
+                return Err(CmdError(
+                    "Could not mark the message read in the system SMS store; try again.".into(),
+                ));
+            }
         }
     }
     state.run(move |c| c.mark_read(sms_id)).await
@@ -157,15 +172,26 @@ pub async fn delete_messages<R: Runtime>(
     ids: Vec<i64>,
 ) -> CmdResult<DeleteOutcome> {
     let lookup = ids.clone();
-    let refs = state.run(move |c| c.provider_refs(&lookup)).await?;
+    let (sms, mms) = state
+        .run(move |c| Ok((c.provider_refs(&lookup)?, c.mms_refs(&lookup)?)))
+        .await?;
     let mut failed_ids = Vec::new();
-    if cfg!(target_os = "android") && !refs.is_empty() {
-        let ok = provider_ok(&app, refs.iter().map(|r| r.provider_id).collect(), true).await;
-        failed_ids = refs
-            .iter()
-            .filter(|r| !ok.contains(&r.provider_id))
-            .map(|r| r.id)
-            .collect();
+    if cfg!(target_os = "android") {
+        // SMS and MMS provider ids are separate namespaces: one call each.
+        for (refs, is_mms) in [(sms, false), (mms, true)] {
+            let ok = provider_ok(
+                &app,
+                refs.iter().map(|r| r.provider_id).collect(),
+                is_mms,
+                true,
+            )
+            .await;
+            failed_ids.extend(
+                refs.iter()
+                    .filter(|r| !ok.contains(&r.provider_id))
+                    .map(|r| r.id),
+            );
+        }
     }
     let keep: HashSet<i64> = failed_ids.iter().copied().collect();
     let delete: Vec<i64> = ids.into_iter().filter(|i| !keep.contains(i)).collect();
@@ -174,6 +200,18 @@ pub async fn delete_messages<R: Runtime>(
         deleted,
         failed_ids,
     })
+}
+
+/// Image bytes of an MMS attachment (thumbnail or full size). Only
+/// allow-listed image types stored by the core are returned, as base64 for a
+/// `blob:` URL: no file path or content URI ever reaches the webview.
+#[tauri::command]
+pub async fn mms_image(
+    state: State<'_, AppState>,
+    part_id: i64,
+    thumb: bool,
+) -> CmdResult<crate::core::MmsImage> {
+    state.run(move |c| c.mms_image(part_id, thumb)).await
 }
 
 #[tauri::command]
@@ -478,6 +516,7 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         block,
         delete_messages,
         get_thread,
+        mms_image,
         inbox_counts,
         reminders,
         set_reminder_done,
@@ -514,6 +553,7 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         block,
         delete_messages,
         get_thread,
+        mms_image,
         inbox_counts,
         reminders,
         set_reminder_done,
