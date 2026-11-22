@@ -616,6 +616,7 @@ export default function App() {
                   bump();
                 }}
                 readOnly={caps.readOnly}
+                nativePicker={caps.nativePicker}
                 otps={otps}
                 reminders={reminders}
                 remindersLoading={remindersLoading}

@@ -222,6 +222,9 @@ pub struct Capabilities {
     pub mms: bool,
     /// SIM slots the store accepts (0 and 1).
     pub sim_slots: u8,
+    /// Native save/open picker for backups (SAF on Android, file dialog on
+    /// Linux); false only in the dev browser, which uses download/file input.
+    pub native_picker: bool,
 }
 
 pub fn platform_capabilities() -> Capabilities {
@@ -234,6 +237,7 @@ pub fn platform_capabilities() -> Capabilities {
         rcs: false,
         mms: false,
         sim_slots: 2,
+        native_picker: true,
     }
 }
 

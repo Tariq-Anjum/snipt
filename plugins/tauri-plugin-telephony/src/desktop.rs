@@ -67,4 +67,13 @@ impl<R: Runtime> Telephony<R> {
     pub fn take_compose(&self) -> crate::Result<Compose> {
         Ok(Compose::default())
     }
+
+    /// Desktop uses native file dialogs from the app crate instead.
+    pub fn saf_save(&self, _req: SafSaveRequest) -> crate::Result<SafSaveResult> {
+        Err(Error::Unsupported)
+    }
+
+    pub fn saf_open(&self) -> crate::Result<SafOpenResult> {
+        Err(Error::Unsupported)
+    }
 }

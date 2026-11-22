@@ -78,4 +78,12 @@ impl<R: Runtime> Telephony<R> {
     pub fn take_compose(&self) -> crate::Result<Compose> {
         self.call("takeCompose", ())
     }
+
+    pub fn saf_save(&self, req: SafSaveRequest) -> crate::Result<SafSaveResult> {
+        self.call("safSave", req)
+    }
+
+    pub fn saf_open(&self) -> crate::Result<SafOpenResult> {
+        self.call("safOpen", ())
+    }
 }

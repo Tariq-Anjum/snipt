@@ -59,6 +59,7 @@ const DEV_CAPS: Capabilities = {
   rcs: false,
   mms: false,
   simSlots: 2,
+  nativePicker: false,
 };
 
 /** Mirror of sms-engine `redact_otp_code` (whole digit runs only). */

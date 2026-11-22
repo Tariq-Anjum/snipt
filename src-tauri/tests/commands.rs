@@ -38,7 +38,7 @@ fn capabilities_is_linux_read_only_on_desktop() {
     assert_eq!(platform_capabilities().platform, "linux");
     assert_eq!(
         serde_json::to_string(&platform_capabilities()).unwrap(),
-        r#"{"platform":"linux","canSend":false,"readOnly":true,"defaultSmsRole":false,"rcs":false,"mms":false,"simSlots":2}"#
+        r#"{"platform":"linux","canSend":false,"readOnly":true,"defaultSmsRole":false,"rcs":false,"mms":false,"simSlots":2,"nativePicker":true}"#
     );
 }
 
@@ -479,4 +479,72 @@ fn persistent_vault_key_survives_a_new_core_and_otp_code_is_plain() {
     b.set_vault_key(key);
     assert_eq!(b.vault_reveal(&payload).unwrap(), "482913");
     assert_eq!(a.otp_code(1).unwrap(), None);
+}
+
+// ---- backup restore through the core (S14) ------------------------------
+
+/// Shared test passphrase (not a secret): same constant as the sms-crypto
+/// tests and `scripts/backup-xcheck.ts`.
+const BACKUP_TEST_PASS: &str = "my-secret-pass-2026";
+
+fn ts_fixture() -> (String, usize) {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../crates/sms-crypto/tests/fixtures/ts_backup.mysms.enc"
+    ))
+    .unwrap();
+    let env: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let n = env["messageCount"].as_u64().unwrap() as usize;
+    (text, n)
+}
+
+#[test]
+fn ts_written_backup_restores_through_core_and_is_idempotent() {
+    let (text, n) = ts_fixture();
+    assert!(n > 0);
+    let mut c = Core::new(Store::open_in_memory(0).unwrap());
+    let first = c.backup_restore(&text, BACKUP_TEST_PASS).unwrap();
+    assert_eq!(first.ingest.inserted, n);
+    assert_eq!(first.ingest.skipped_existing, 0);
+    assert_eq!(c.store().message_count().unwrap(), n as i64);
+
+    let second = c.backup_restore(&text, BACKUP_TEST_PASS).unwrap();
+    assert_eq!(second.ingest.inserted, 0);
+    assert_eq!(second.ingest.skipped_existing, n);
+    assert_eq!(c.store().message_count().unwrap(), n as i64);
+}
+
+#[test]
+fn wrong_passphrase_is_rejected_through_core_without_touching_the_store() {
+    let (text, _) = ts_fixture();
+    let mut c = Core::new(Store::open_in_memory(0).unwrap());
+    for bad in ["wrong-passphrase", "my-secret-pass-2027"] {
+        let err = c.backup_restore(&text, bad).unwrap_err();
+        assert!(
+            err.to_string().contains("Incorrect passphrase"),
+            "unexpected error: {err}"
+        );
+        assert!(!err.to_string().contains(bad));
+    }
+    let empty = c.backup_restore(&text, "  ").unwrap_err();
+    assert!(empty.to_string().contains("passphrase"));
+    assert_eq!(c.store().message_count().unwrap(), 0);
+}
+
+#[test]
+fn rust_written_backup_round_trips_through_core_and_is_ciphertext() {
+    let a = seeded();
+    let f = a.backup_create(BACKUP_TEST_PASS).unwrap();
+    assert!(f.filename.ends_with(".mysms.enc"));
+    // Random base64 can contain any 3 letters, so probe with whole bodies.
+    for m in a.store().all_messages().unwrap().iter().take(20) {
+        assert!(
+            !f.content.contains(&m.body),
+            "plaintext leaked into the envelope"
+        );
+    }
+    assert!(f.content.contains("mySMS-encrypted-backup-v1"));
+    let mut b = Core::new(Store::open_in_memory(0).unwrap());
+    let r = b.backup_restore(&f.content, BACKUP_TEST_PASS).unwrap();
+    assert_eq!(r.ingest.inserted, f.message_count);
 }

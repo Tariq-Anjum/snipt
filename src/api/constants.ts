@@ -13,7 +13,7 @@ export const CLOUD_BACKUP_PROVIDERS: readonly CloudProviderOption[] = [
     id: 'device_picker',
     label: 'Any Installed Cloud App / Device',
     subtitle: 'Uses your phone or OS file picker (SAF) to save to any cloud drive or local folder.',
-    androidSafHint: 'Android ACTION_CREATE_DOCUMENT',
+    androidSafHint: 'Android ACTION_CREATE_DOCUMENT (system picker)',
   },
   {
     id: 'google_drive',

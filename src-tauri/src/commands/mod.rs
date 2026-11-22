@@ -20,7 +20,8 @@ use crate::core::{
     AppSettings, AppState, BackupFile, Capabilities, IncomingResult, MessagesPage, OtpItemView,
     OutgoingResult, RestoreReport,
 };
-use crate::error::CmdResult;
+use crate::error::{CmdError, CmdResult};
+use crate::picker;
 
 #[tauri::command]
 pub async fn threads_page(
@@ -336,6 +337,77 @@ pub async fn backup_restore(
         .await
 }
 
+/// Outcome of the native "save backup" flow.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSaved {
+    /// The user dismissed the picker; nothing was written.
+    pub cancelled: bool,
+    pub filename: String,
+    pub message_count: usize,
+}
+
+/// Outcome of the native "restore backup" flow.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupRestored {
+    pub cancelled: bool,
+    pub name: String,
+    pub report: Option<RestoreReport>,
+}
+
+/// Encrypt, then let the user pick the destination (SAF on Android, a save
+/// dialog on Linux). The ciphertext goes core -> native writer and never
+/// crosses the webview; the passphrase buffer is wiped when this returns.
+#[tauri::command]
+pub async fn backup_save<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    passphrase: String,
+) -> CmdResult<BackupSaved> {
+    let passphrase = Zeroizing::new(passphrase);
+    let file = state.run(move |c| c.backup_create(&passphrase)).await?;
+    let (name, count) = (file.filename.clone(), file.message_count);
+    let content = Zeroizing::new(file.content);
+    let written = native(&app, move |a| picker::save(a, &file.filename, &content))
+        .await
+        .ok_or_else(|| CmdError("backup picker failed".into()))??;
+    Ok(BackupSaved {
+        cancelled: !written,
+        filename: name,
+        message_count: count,
+    })
+}
+
+/// Let the user pick a backup file, then restore it with `passphrase`.
+/// A wrong passphrase surfaces as the core's decrypt error.
+#[tauri::command]
+pub async fn backup_restore_picked<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    passphrase: String,
+) -> CmdResult<BackupRestored> {
+    let passphrase = Zeroizing::new(passphrase);
+    let picked = native(&app, picker::open)
+        .await
+        .ok_or_else(|| CmdError("backup picker failed".into()))??;
+    let Some((name, content)) = picked else {
+        return Ok(BackupRestored {
+            cancelled: true,
+            name: String::new(),
+            report: None,
+        });
+    };
+    let report = state
+        .run(move |c| c.backup_restore(&content, &passphrase))
+        .await?;
+    Ok(BackupRestored {
+        cancelled: false,
+        name,
+        report: Some(report),
+    })
+}
+
 /// Build capabilities, updated on Android with the shell's live status
 /// (default-SMS role, radio, SIM count). Desktop reports the build values.
 #[tauri::command]
@@ -416,6 +488,8 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         translate,
         backup_create,
         backup_restore,
+        backup_save,
+        backup_restore_picked,
         capabilities,
         set_back_handler,
         power_state,
@@ -454,6 +528,8 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         translate,
         backup_create,
         backup_restore,
+        backup_save,
+        backup_restore_picked,
         capabilities,
         set_back_handler,
         power_state,

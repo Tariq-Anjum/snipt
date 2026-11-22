@@ -120,3 +120,53 @@ pub struct Done {
     #[serde(default)]
     pub ok: bool,
 }
+
+/// Storage Access Framework save (`ACTION_CREATE_DOCUMENT`): the user picks
+/// the destination (local folder, Drive, OneDrive, Dropbox, any provider), then
+/// the shell streams `content` into it through `ContentResolver`. The content
+/// is the already-encrypted backup envelope; it is never logged.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SafSaveRequest {
+    /// Suggested file name (`EXTRA_TITLE`).
+    pub name: String,
+    pub content: String,
+}
+
+// `content` is ciphertext, but keep it out of any `{:?}` log regardless.
+impl std::fmt::Debug for SafSaveRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SafSaveRequest")
+            .field("name", &self.name)
+            .field("content", &format_args!("<{} bytes>", self.content.len()))
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SafSaveResult {
+    /// The user dismissed the picker; nothing was written.
+    pub cancelled: bool,
+}
+
+/// Result of `ACTION_OPEN_DOCUMENT`: the chosen file's name and text.
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SafOpenResult {
+    pub cancelled: bool,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub content: String,
+}
+
+impl std::fmt::Debug for SafOpenResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SafOpenResult")
+            .field("cancelled", &self.cancelled)
+            .field("name", &self.name)
+            .field("content", &format_args!("<{} bytes>", self.content.len()))
+            .finish()
+    }
+}

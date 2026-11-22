@@ -29,6 +29,7 @@ interface RemindersViewProps {
   onBackupSuccess: (timestampMs: number) => void;
   onRestored: (report: RestoreReport) => void;
   readOnly: boolean;
+  nativePicker: boolean;
   otps: OtpItemView[];
   reminders: ReminderItem[];
   remindersLoading: boolean;
@@ -66,6 +67,7 @@ export function RemindersView({
   onBackupSuccess,
   onRestored,
   readOnly,
+  nativePicker,
   otps,
   reminders,
   remindersLoading,
@@ -198,6 +200,7 @@ export function RemindersView({
           onBackupSuccess={onBackupSuccess}
           onRestored={onRestored}
           readOnly={readOnly}
+          nativePicker={nativePicker}
         />
 
         {/* Section 1: Weekly Useless SMS Scan (Categorized Cleanup) */}

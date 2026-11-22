@@ -127,6 +127,8 @@ export interface Capabilities {
   rcs: boolean;
   mms: boolean;
   simSlots: number;
+  /** Native backup save/open picker (SAF / file dialog). False in the dev browser. */
+  nativePicker: boolean;
 }
 
 export const READ_ONLY_CAPABILITIES: Capabilities = {
@@ -137,6 +139,7 @@ export const READ_ONLY_CAPABILITIES: Capabilities = {
   rcs: false,
   mms: false,
   simSlots: 2,
+  nativePicker: false,
 };
 
 export interface ReminderItem {

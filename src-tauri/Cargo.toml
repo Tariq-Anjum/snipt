@@ -42,3 +42,7 @@ tauri-plugin-telephony.workspace = true
 # Tauri/wry already link on Android (Cargo.lock), so no second copy is built.
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "=0.21.1", default-features = false }
+
+# Linux save/open dialogs for the encrypted backup (desktop only; Android uses SAF).
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tauri-plugin-dialog = "=2.8.4"

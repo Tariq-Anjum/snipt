@@ -12,6 +12,8 @@ import { useRef, useState, type ChangeEvent } from 'react';
 import {
   backupCreate,
   backupRestore,
+  backupRestorePicked,
+  backupSave,
   CLOUD_BACKUP_PROVIDERS,
   downloadText,
   type CloudBackupProvider,
@@ -27,6 +29,8 @@ interface CloudBackupSectionProps {
   onRestored: (report: RestoreReport) => void;
   /** Linux viewer: restore only (backups are made on the phone). */
   readOnly: boolean;
+  /** Native save/open picker (SAF / file dialog) exists; else download + file input. */
+  nativePicker: boolean;
 }
 
 export function CloudBackupSection({
@@ -36,6 +40,7 @@ export function CloudBackupSection({
   onBackupSuccess,
   onRestored,
   readOnly,
+  nativePicker,
 }: CloudBackupSectionProps) {
   const [passphrase, setPassphrase] = useState('');
   const [showPassphrase, setShowPassphrase] = useState(false);
@@ -61,17 +66,34 @@ export function CloudBackupSection({
 
     setBusy(true);
     try {
-      const file = await backupCreate(passphrase);
-      downloadText(file.filename, file.content);
-      onBackupSuccess(Date.now());
-      setStatusMessage(
-        `Encrypted ${file.messageCount.toLocaleString('en-IN')} messages with AES-256-GCM into ${file.filename} (ready for ${selectedProviderMeta.label}).`
-      );
+      if (nativePicker) {
+        // The system picker lists the installed cloud apps (Drive, OneDrive,
+        // Dropbox, ...) and local folders; the provider card is a hint only.
+        const saved = await backupSave(passphrase);
+        if (saved.cancelled) {
+          setStatusMessage('Backup cancelled: nothing was saved.');
+        } else {
+          onBackupSuccess(Date.now());
+          setStatusMessage(
+            `Encrypted ${saved.messageCount.toLocaleString('en-IN')} messages with AES-256-GCM and saved ${saved.filename}.`
+          );
+        }
+      } else {
+        const file = await backupCreate(passphrase);
+        downloadText(file.filename, file.content);
+        onBackupSuccess(Date.now());
+        setStatusMessage(
+          `Encrypted ${file.messageCount.toLocaleString('en-IN')} messages with AES-256-GCM into ${file.filename} (ready for ${selectedProviderMeta.label}).`
+        );
+      }
     } catch (err) {
       setErrorMessage(
         err instanceof Error ? err.message : 'Failed to create encrypted backup.'
       );
     } finally {
+      // The passphrase is only needed for this call.
+      setPassphrase('');
+      setShowPassphrase(false);
       setBusy(false);
     }
   };
@@ -85,7 +107,40 @@ export function CloudBackupSection({
       );
       return;
     }
+    if (nativePicker) {
+      void handleRestoreNative();
+      return;
+    }
     fileInputRef.current?.click();
+  };
+
+  const restoredMessage = (report: RestoreReport, name: string) =>
+    `Restored ${report.ingest.inserted.toLocaleString('en-IN')} messages (${report.ingest.skippedExisting.toLocaleString('en-IN')} already present), ${report.archivedThreads} archived threads and ${report.blockedSenders} blocked senders${name ? ` from ${name}` : ''}.`;
+
+  const wrongPassphraseHint = (err: unknown) => {
+    const m = err instanceof Error ? err.message : '';
+    return /passphrase/i.test(m)
+      ? `${m} Re-enter the passphrase and choose the file again.`
+      : m || 'Could not decrypt this backup file.';
+  };
+
+  const handleRestoreNative = async () => {
+    setBusy(true);
+    try {
+      const r = await backupRestorePicked(passphrase);
+      if (r.cancelled || !r.report) {
+        setStatusMessage('Restore cancelled: no file was chosen.');
+      } else {
+        onRestored(r.report);
+        setStatusMessage(restoredMessage(r.report, r.name));
+      }
+    } catch (err) {
+      setErrorMessage(wrongPassphraseHint(err));
+    } finally {
+      setPassphrase('');
+      setShowPassphrase(false);
+      setBusy(false);
+    }
   };
 
   const handleFileSelected = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -101,16 +156,12 @@ export function CloudBackupSection({
       const text = await file.text();
       const report = await backupRestore(text, passphrase);
       onRestored(report);
-      setStatusMessage(
-        `Restored ${report.ingest.inserted.toLocaleString('en-IN')} messages (${report.ingest.skippedExisting.toLocaleString('en-IN')} already present), ${report.archivedThreads} archived threads and ${report.blockedSenders} blocked senders from ${file.name}.`
-      );
+      setStatusMessage(restoredMessage(report, file.name));
     } catch (err) {
-      setErrorMessage(
-        err instanceof Error
-          ? err.message
-          : 'Could not decrypt this backup file.'
-      );
+      setErrorMessage(wrongPassphraseHint(err));
     } finally {
+      setPassphrase('');
+      setShowPassphrase(false);
       setBusy(false);
     }
   };
