@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sms_engine::{Analysis, budget::categorize_merchant_expense};
 use sms_types::{MessageProtocol, RawSms, js, time::is_valid_timestamp_ms};
 
+use crate::ids::{IdKind, allocate, note_used, valid_id};
 use crate::{Result, Store, StoreError, threads::recompute_thread};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -70,6 +71,9 @@ pub(crate) fn insert_message(tx: &Transaction<'_>, sms: &RawSms, a: &Analysis) -
     }
     if !is_valid_timestamp_ms(sms.timestamp_ms) {
         return Err(StoreError::Invalid("timestampMs out of range"));
+    }
+    if !valid_id(sms.id) || !valid_id(sms.thread_id) {
+        return Err(StoreError::Invalid("id out of range"));
     }
     let exists: Option<i64> = tx
         .prepare_cached("SELECT 1 FROM messages WHERE id = ?1")?
@@ -136,6 +140,8 @@ pub(crate) fn insert_message(tx: &Transaction<'_>, sms: &RawSms, a: &Analysis) -
             categorize_merchant_expense(t.merchant_or_vpa.as_deref(), &sms.body).as_str(),
         ])?;
     }
+    note_used(tx, IdKind::Message, sms.id)?;
+    note_used(tx, IdKind::Thread, sms.thread_id)?;
     Ok(true)
 }
 
@@ -207,18 +213,10 @@ impl Store {
             )?
             .query_row([normalized.to_lowercase()], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
-        let next_id: i64 = tx.query_row(
-            "SELECT MAX(COALESCE(MAX(id), 1000), 1000) + 1 FROM messages",
-            [],
-            |r| r.get(0),
-        )?;
+        let next_id = allocate(&tx, IdKind::Message)?;
         let thread_id = match &existing {
             Some((t, _)) => *t,
-            None => tx.query_row(
-                "SELECT MAX(COALESCE(MAX(thread_id), 100), 100) + 1 FROM messages",
-                [],
-                |r| r.get(0),
-            )?,
+            None => allocate(&tx, IdKind::Thread)?,
         };
         let contact_name = input
             .contact_name

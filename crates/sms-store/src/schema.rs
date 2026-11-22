@@ -101,3 +101,41 @@ CREATE TRIGGER messages_au AFTER UPDATE OF body, search_extra ON messages BEGIN
     INSERT INTO messages_fts(rowid, body, search_extra) VALUES (new.id, new.body, new.search_extra);
 END;
 "#;
+
+/// Schema v2 (R2/R3 review):
+/// - `id_alloc`: monotonic high-water marks for message and thread ids, so
+///   a deleted id is never handed out again (a stale notification action or
+///   send callback can never address a newer message/thread). Explicit-id
+///   inserts (backup restore, seed) raise the mark too.
+/// - `send_attempts` / `send_part_results`: one row per radio hand-off with
+///   its provider binding (set once) and the persisted per-part sent /
+///   delivery outcomes the message's `send_status` is derived from.
+/// - `provider_tombstones`: provider ids of rows deleted locally, so the
+///   provider replay in reconciliation never resurrects them.
+pub const SCHEMA_V2: &str = r#"
+CREATE TABLE id_alloc (name TEXT PRIMARY KEY, next INTEGER NOT NULL);
+CREATE TABLE send_attempts (
+    attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    msg_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    parts INTEGER NOT NULL,
+    provider_id INTEGER,
+    created_ms INTEGER NOT NULL
+);
+CREATE INDEX idx_send_attempts_msg ON send_attempts(msg_id);
+CREATE TABLE send_part_results (
+    attempt_id INTEGER NOT NULL REFERENCES send_attempts(attempt_id) ON DELETE CASCADE,
+    part INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    PRIMARY KEY (attempt_id, part, kind)
+);
+CREATE TABLE provider_tombstones (provider_id INTEGER PRIMARY KEY);
+CREATE TRIGGER messages_tombstone AFTER DELETE ON messages
+    WHEN old.provider_id IS NOT NULL BEGIN
+    INSERT OR IGNORE INTO provider_tombstones(provider_id) VALUES (old.provider_id);
+END;
+-- Provider rows at or below this id predate tombstones (v1 deletions were
+-- not recorded), so the reconcile replay never considers them.
+INSERT OR REPLACE INTO meta(key, value)
+    SELECT 'provider_replay_floor', CAST(COALESCE(MAX(provider_id), 0) AS TEXT) FROM messages;
+"#;

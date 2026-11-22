@@ -27,9 +27,12 @@ fn seeded(state: &str) -> (Store, i64, Vec<RawSms>) {
 }
 
 #[test]
-fn fts5_trigram_available_and_schema_v1() {
+fn fts5_trigram_available_and_latest_schema() {
     let s = Store::open_in_memory(TZ).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 1);
+    assert_eq!(
+        s.schema_version().unwrap(),
+        sms_store::migrate::LATEST_VERSION
+    );
     let sql: String = s
         .connection()
         .query_row(

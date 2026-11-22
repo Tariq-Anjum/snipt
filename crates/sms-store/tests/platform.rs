@@ -6,7 +6,9 @@ mod common;
 
 use common::*;
 use sms_engine::inbox::InboxFilter;
-use sms_store::{IncomingSms, OutgoingSms, SendStatus, Store, threads::make_preview};
+use sms_store::{
+    IncomingSms, OutgoingSms, PartKind, PartOutcome, SendStatus, Store, threads::make_preview,
+};
 use sms_types::*;
 
 fn seeded(state: &str) -> (Store, i64, Vec<RawSms>) {
@@ -168,6 +170,7 @@ fn outgoing_queue_and_send_status() {
         address: None,
         body: "  On my way  ".into(),
         sim_slot: 1,
+        reply_to: None,
     };
     let m = s.queue_outgoing(&reply, now + 10).unwrap();
     assert!(m.is_outgoing && m.read());
@@ -181,10 +184,13 @@ fn outgoing_queue_and_send_status() {
         vec![(m.id, SendStatus::Queued)]
     );
 
-    assert!(
-        s.set_send_status(m.id, SendStatus::Sent, Some(777))
-            .unwrap()
-    );
+    let a = s.begin_send_attempt(m.id, 1, now + 11).unwrap();
+    assert!(s.bind_send_provider(a, 777).unwrap());
+    let u = s
+        .record_send_part(a, 0, PartKind::Sent, PartOutcome::Ok)
+        .unwrap()
+        .unwrap();
+    assert_eq!((u.status, u.changed), (SendStatus::Sent, true));
     assert_eq!(
         s.send_statuses(&[m.id]).unwrap(),
         vec![(m.id, SendStatus::Sent)]
@@ -193,7 +199,12 @@ fn outgoing_queue_and_send_status() {
     // Incoming messages have no send state and cannot be given one.
     let inc = s.messages_page(101, None, 50).unwrap().0;
     let inc_id = inc.iter().find(|x| !x.sms.is_outgoing).unwrap().sms.id;
-    assert!(!s.set_send_status(inc_id, SendStatus::Sent, None).unwrap());
+    assert!(
+        s.set_send_status(inc_id, SendStatus::Sent)
+            .unwrap()
+            .is_none()
+    );
+    assert!(s.begin_send_attempt(inc_id, 1, now).is_err());
     assert!(s.send_statuses(&[inc_id]).unwrap().is_empty());
 
     // New address starts a thread; same address (any case) joins it.
@@ -204,6 +215,7 @@ fn outgoing_queue_and_send_status() {
                 address: Some("+919800000001".into()),
                 body: "hi".into(),
                 sim_slot: 0,
+                reply_to: None,
             },
             now + 20,
         )
@@ -215,6 +227,7 @@ fn outgoing_queue_and_send_status() {
         address: None,
         body: "x".into(),
         sim_slot: 0,
+        reply_to: None,
     };
     assert!(bad(OutgoingSms {
         body: "   ".into(),

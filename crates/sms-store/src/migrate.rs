@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::{StoreError, schema};
 
 /// Ordered migrations; index i migrates user_version i → i+1.
-const MIGRATIONS: &[&str] = &[schema::SCHEMA_V1];
+const MIGRATIONS: &[&str] = &[schema::SCHEMA_V1, schema::SCHEMA_V2];
 
 pub const LATEST_VERSION: i64 = MIGRATIONS.len() as i64;
 

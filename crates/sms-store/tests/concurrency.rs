@@ -115,7 +115,11 @@ fn simultaneous_first_open_migrates_once() {
             })
             .collect();
         for h in opens {
-            assert_eq!(h.join().unwrap(), Ok(1), "round {round}");
+            assert_eq!(
+                h.join().unwrap(),
+                Ok(sms_store::migrate::LATEST_VERSION),
+                "round {round}"
+            );
         }
     }
 }
