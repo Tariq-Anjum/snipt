@@ -44,4 +44,19 @@ inst "$H3" --uninstall >/dev/null
 [ -f "$H3/.local/share/applications/mimeinfo.cache" ] || fail "shared mimeinfo.cache removed"
 [ -f "$H3/.local/share/applications/intent.cache" ] || fail "shared intent.cache removed"
 
+# 4. R4: a literal % in the install path is encoded as %% in Exec=.
+H4="$WORK/50%test"; mkdir -p "$H4"
+inst "$H4" >/dev/null
+grep -qx "Exec=\"$WORK/50%%test/.local/bin/snipt\"" "$H4/.local/share/applications/snipt.desktop" \
+  || fail "literal % not encoded: $(grep '^Exec=' "$H4/.local/share/applications/snipt.desktop")"
+if command -v desktop-file-validate >/dev/null; then
+  desktop-file-validate "$H4/.local/share/applications/snipt.desktop" 2>&1 | grep -v 'hint:' | grep . && fail "desktop-file-validate errors (% path)" || true
+fi
+
+# 5. R4: a dry run needs no writable temp directory and writes nothing.
+H5="$WORK/h5"; mkdir -p "$H5"
+TMPDIR=/nonexistent-snipt-tmp inst "$H5" --dry-run >"$WORK/dry.txt" 2>&1 || fail "dry run failed: $(cat "$WORK/dry.txt")"
+grep -q '^\[dry-run\] desktop entry: Exec=' "$WORK/dry.txt" || fail "dry run did not report the launcher"
+[ -z "$(ls -A "$H5")" ] || fail "dry run wrote files"
+
 echo "install-linux.sh regression: OK"

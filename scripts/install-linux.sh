@@ -58,9 +58,12 @@ refresh_caches() {
   fi
 }
 
-# Desktop Entry spec quoting for an Exec argument.
+# Desktop Entry spec quoting for an Exec argument: a literal % is written
+# %% (otherwise "%t" in a path is a field code), then the quoted-argument
+# escapes for \ " ` $.
 exec_quote() {
   local s="$1"
+  s="${s//%/%%}"
   s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//\`/\\\`}"; s="${s//\$/\\\$}"
   printf '"%s"' "$s"
 }
@@ -84,17 +87,25 @@ for s in "${SRC[@]}"; do
   [ -f "$s" ] || { echo "missing source: $s$([ "$s" = "$SRC_BIN" ] && echo ' (run scripts/build-linux.sh first)')" >&2; exit 1; }
 done
 
-TMP_DESKTOP="$(mktemp)"
-trap 'rm -f "$TMP_DESKTOP"' EXIT
 EXEC_LINE="Exec=$(exec_quote "$BINDIR/snipt")"
 grep -q '^Exec=' "$SRC_DESKTOP" || die "$SRC_DESKTOP has no Exec= line"
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in
-    Exec=*) printf '%s\n' "$EXEC_LINE" ;;
-    TryExec=*) ;;
-    *) printf '%s\n' "$line" ;;
-  esac
-done <"$SRC_DESKTOP" >"$TMP_DESKTOP"
+render_desktop() {
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      Exec=*) printf '%s\n' "$EXEC_LINE" ;;
+      TryExec=*) ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done <"$SRC_DESKTOP"
+}
+# The rendered launcher needs a temporary file only for a real install; a
+# dry run writes nothing (it works without a writable temp directory).
+TMP_DESKTOP="(rendered $SRC_DESKTOP)"
+if [ "$DRY" != 1 ]; then
+  TMP_DESKTOP="$(mktemp)"
+  trap 'rm -f "$TMP_DESKTOP"' EXIT
+  render_desktop >"$TMP_DESKTOP"
+fi
 
 for i in "${!SRC[@]}"; do
   src="${SRC[$i]}"
