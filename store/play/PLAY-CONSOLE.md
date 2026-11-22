@@ -1,6 +1,6 @@
 # Snipt — Google Play Console answers (copy-paste)
 
-Package: `app.snipt.sms` · Version 1.1.1 (versionCode 3) · AAB: `dist/Snipt-v1.1.1.aab`
+Package: `app.snipt.sms` · Version 1.1.2 (versionCode 4) · AAB: `dist/Snipt-v1.1.2.aab`
 Privacy policy URL: `https://github.com/Tariq-Anjum/snipt/blob/main/PRIVACY.md`
 
 ---
@@ -135,7 +135,7 @@ Category: **Utility, productivity, communication or other**. Answer **No** to vi
 
 ## 6. Release setup
 
-- **App signing:** use **Play App Signing** (default). Upload `dist/Snipt-v1.1.1.aab`, which is signed with your existing key in `~/.config/mysms-signing/`; that key becomes your **upload key**. Keep it backed up; if lost, request an upload-key reset from Play support (Play keeps the app-signing key).
+- **App signing:** use **Play App Signing** (default). Upload `dist/Snipt-v1.1.2.aab`, which is signed with your existing key in `~/.config/mysms-signing/`; that key becomes your **upload key**. Keep it backed up; if lost, request an upload-key reset from Play support (Play keeps the app-signing key).
 - **Target API:** the AAB targets API 37, above Play's current minimum.
 - **ABI:** arm64-v8a only. Covers nearly all current Android phones; 32-bit-only phones will not see the app.
 - **Countries:** start with India; widen later.
