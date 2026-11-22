@@ -10,13 +10,13 @@ for c in node npm cargo; do
   command -v "$c" >/dev/null || { echo "missing: $c" >&2; exit 1; }
 done
 [ -d node_modules ] || { echo "node_modules missing: run 'npm ci' first" >&2; exit 1; }
-[ "$(uname -m)" = x86_64 ] || echo "warning: host is $(uname -m), artifact name says x86_64" >&2
+# The artifact is published as x86-64: refuse other hosts (no cross build here).
+[ "$(uname -m)" = x86_64 ] || { echo "host is $(uname -m); this script only builds the x86-64 artifact" >&2; exit 1; }
+command -v file >/dev/null || { echo "missing: file (needed for the artifact architecture check)" >&2; exit 1; }
 
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
-echo "== npm run build"
-npm run build >"$LOG" 2>&1 || { tail -30 "$LOG"; exit 1; }
-tail -3 "$LOG"
+# The frontend is built once, by Tauri's beforeBuildCommand (npm run build).
 echo "== tauri build --no-bundle (CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS)"
 npx tauri build --no-bundle >"$LOG" 2>&1 || { tail -40 "$LOG"; exit 1; }
 tail -3 "$LOG"
@@ -26,9 +26,16 @@ TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | node -e 'let s="";pr
 BIN="$TARGET_DIR/release/snipt"
 [ -x "$BIN" ] || { echo "binary not found: $BIN" >&2; exit 1; }
 
+# Verify the architecture before publishing under the x86-64 name.
+case "$(file -b "$BIN")" in
+  *"ELF 64-bit"*x86-64*) ;;
+  *) echo "binary is not an x86-64 ELF: $(file -b "$BIN" | cut -c1-120)" >&2; exit 1 ;;
+esac
+
 mkdir -p dist
 OUT=dist/Snipt-linux-x86_64
-cp -f "$BIN" "$OUT"
+cp -f "$BIN" "$OUT.tmp"
+mv -f "$OUT.tmp" "$OUT"
 # Release profile may already strip; strip is a no-op safety net.
 command -v strip >/dev/null && strip --strip-unneeded "$OUT" 2>/dev/null || true
 chmod 0755 "$OUT"
