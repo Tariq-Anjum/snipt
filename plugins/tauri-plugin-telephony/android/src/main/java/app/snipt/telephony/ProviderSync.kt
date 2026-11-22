@@ -17,7 +17,6 @@ object ProviderSync {
     private const val TAG = "SniptProvider"
     private const val PREFS = "snipt_sync"
     private const val KEY_IMPORTED = "inbox_imported_v1"
-    private const val BATCH = 300
 
     fun writeInbox(ctx: Context, address: String, body: String, receivedMs: Long, sentMs: Long, subId: Int): Long {
         val v = ContentValues().apply {
@@ -142,59 +141,39 @@ object ProviderSync {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_IMPORTED, false)
 
     /**
-     * First-run import of the existing provider inbox into the core (with
-     * provider ids, so it is idempotent), then a reconcile pass so read flags
-     * match. Returns (inserted, skipped) or null when the provider is not
-     * readable.
+     * Import of provider inbox rows the core is missing: the first-run
+     * import, and the explicit "Import missing messages" action (R4 #5
+     * recovery for pre-v2 receipts the automatic replay cannot tell from v1
+     * deletions). Only rows the core neither holds nor deleted locally
+     * (tombstones) are ingested, with their provider id and READ flag, so it
+     * is idempotent and never resurrects a message deleted in Snipt. Then a
+     * reconcile pass. Returns (inserted, skipped) or null when the provider
+     * is not readable.
      */
     @Synchronized
     fun importInbox(ctx: Context): Pair<Long, Long>? {
         if (!NativeCore.ensure(ctx)) return null
-        val cursor = try {
+        val ids = ArrayList<Long>()
+        try {
             ctx.contentResolver.query(
                 Telephony.Sms.Inbox.CONTENT_URI,
-                arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.SUBSCRIPTION_ID),
+                arrayOf(Telephony.Sms._ID),
                 null, null, Telephony.Sms._ID + " ASC"
             )
         } catch (e: Exception) {
             null
-        } ?: return null
-        var inserted = 0L
-        var skipped = 0L
-        cursor.use { c ->
-            var batch = JSONArray()
-            fun flush() {
-                if (batch.length() == 0) return
-                NativeCore.ingestBatch(batch.toString())?.let {
-                    val o = JSONObject(it)
-                    inserted += o.optLong("inserted")
-                    skipped += o.optLong("skipped") + o.optLong("failed")
-                }
-                batch = JSONArray()
-            }
-            while (c.moveToNext()) {
-                val address = c.getString(1) ?: continue
-                val body = c.getString(2) ?: ""
-                if (address.isBlank()) continue
-                val sub = if (c.isNull(4)) -1 else c.getInt(4)
-                batch.put(JSONObject().apply {
-                    put("providerId", c.getLong(0))
-                    put("message", JSONObject().apply {
-                        put("sender", address)
-                        put("body", body)
-                        put("isKnownContact", false)
-                        put("simSlot", Subs.slotForSubId(ctx, sub))
-                        put("timestampMs", c.getLong(3))
-                    })
-                })
-                if (batch.length() >= BATCH) flush()
-            }
-            flush()
+        }?.use { c -> while (c.moveToNext()) ids.add(c.getLong(0)) } ?: return null
+        val missing = ArrayList<Long>()
+        for (chunk in ids.chunked(5000)) {
+            val r = NativeCore.providerMissing(JSONArray(chunk).toString()) ?: return null
+            val a = JSONArray(r)
+            for (k in 0 until a.length()) missing.add(a.getLong(k))
         }
+        val inserted = replay(ctx, missing)
         reconcile(ctx)
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_IMPORTED, true).apply()
-        Log.i(TAG, "inbox import: inserted=$inserted skipped=$skipped")
-        return inserted to skipped
+        Log.i(TAG, "inbox import: inserted=$inserted skipped=${ids.size - inserted}")
+        return inserted to (ids.size - inserted)
     }
 
     /** Inbox rows this young may still be mid-receipt (SMS_DELIVER running). */
@@ -215,7 +194,8 @@ object ProviderSync {
     @Synchronized
     fun reconcile(ctx: Context) {
         if (!NativeCore.ensure(ctx)) return
-        val candidates = NativeCore.reconcileBegin()?.let { JSONArray(it) } ?: return
+        // Candidates and tombstones, both captured before the provider query.
+        val snapshot = NativeCore.reconcileBegin()?.let { JSONObject(it) } ?: return
         val present = JSONArray()
         val read = JSONArray()
         val inbox = JSONArray()
@@ -238,8 +218,9 @@ object ProviderSync {
             }
         }
         val r = NativeCore.reconcile(
-            JSONObject().put("candidates", candidates).put("present", present)
-                .put("read", read).put("inbox", inbox).toString()
+            JSONObject().put("candidates", snapshot.getJSONArray("candidates"))
+                .put("tombstones", snapshot.getJSONArray("tombstones"))
+                .put("present", present).put("read", read).put("inbox", inbox).toString()
         ) ?: return
         val rep = JSONObject(r)
         val missing = rep.optJSONArray("missing") ?: JSONArray()
@@ -247,8 +228,11 @@ object ProviderSync {
         if (missing.length() > 0) replay(ctx, (0 until missing.length()).map { missing.getLong(it) })
     }
 
-    /** Re-ingest provider inbox rows by id (chunked IN queries). */
-    private fun replay(ctx: Context, ids: List<Long>) {
+    /**
+     * Re-ingest provider inbox rows by id (chunked IN queries), carrying the
+     * provider READ flag. Returns the number stored.
+     */
+    private fun replay(ctx: Context, ids: List<Long>): Long {
         var inserted = 0L
         for (chunk in ids.chunked(200)) {
             val sel = Telephony.Sms._ID + " IN (" + chunk.joinToString(",") + ")"
@@ -256,7 +240,7 @@ object ProviderSync {
             try {
                 ctx.contentResolver.query(
                     Telephony.Sms.CONTENT_URI,
-                    arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.SUBSCRIPTION_ID, Telephony.Sms.TYPE),
+                    arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.SUBSCRIPTION_ID, Telephony.Sms.TYPE, Telephony.Sms.READ),
                     sel, null, null
                 )
             } catch (e: Exception) {
@@ -269,6 +253,7 @@ object ProviderSync {
                     val sub = if (c.isNull(4)) -1 else c.getInt(4)
                     batch.put(JSONObject().apply {
                         put("providerId", c.getLong(0))
+                        put("read", c.getInt(6) != 0)
                         put("message", JSONObject().apply {
                             put("sender", address)
                             put("body", c.getString(2) ?: "")
@@ -284,5 +269,6 @@ object ProviderSync {
             }
         }
         Log.i(TAG, "replayed missed receipts: inserted=$inserted")
+        return inserted
     }
 }

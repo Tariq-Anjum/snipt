@@ -20,6 +20,14 @@ import org.json.JSONObject
  * lock screen gets a generic public version. PendingIntents are explicit and
  * FLAG_IMMUTABLE, except the Reply one, which must be FLAG_MUTABLE so the
  * system can attach the RemoteInput text.
+ *
+ * Action identity (R4 #3): each action PendingIntent carries
+ * `snipt-action://<action>/<msgId>/<threadId>` as its data URI.
+ * `Intent.filterEquals` compares the data, so two notifications can never
+ * share (and, through FLAG_UPDATE_CURRENT, overwrite) each other's action:
+ * a request code derived from the thread id can collide, the full identity
+ * cannot. Message ids are never reused, so an old action stays bound to its
+ * own message.
  */
 object Notifier {
     const val CHANNEL_MESSAGES = "snipt_messages"
@@ -83,9 +91,10 @@ object Notifier {
                 .putExtra(EXTRA_NOTIF_ID, notifId)
                 .putExtra(EXTRA_SIM_SLOT, simSlot)
                 .putExtra(EXTRA_TITLE, title)
+                .setData(actionUri(action, msgId, threadId))
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or
                 if (mutable) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
-            return PendingIntent.getBroadcast(ctx, notifId * 8 + req, i, flags)
+            return PendingIntent.getBroadcast(ctx, req, i, flags)
         }
 
         val channel = if (hasOtp) CHANNEL_CODES else CHANNEL_MESSAGES
@@ -161,6 +170,15 @@ object Notifier {
             // permission revoked
         }
     }
+
+    /** Unique identity of one notification action (see class docs). */
+    fun actionUri(action: String, msgId: Long, threadId: Long): android.net.Uri =
+        android.net.Uri.Builder()
+            .scheme("snipt-action")
+            .authority(action.substringAfterLast('.').lowercase())
+            .appendPath(msgId.toString())
+            .appendPath(threadId.toString())
+            .build()
 
     /** A stale action (source deleted / not ours): drop its notification. */
     fun stale(ctx: Context, notifId: Int) = cancel(ctx, notifId)

@@ -120,8 +120,9 @@ class NotificationActionReceiver : BroadcastReceiver() {
     private fun markRead(ctx: Context, msgId: Long, row: Row): Boolean {
         val ok = row.id < 0 || ProviderSync.markRead(ctx, listOf(row.id), row.mms).all { it.second }
         if (!ok) return false
-        NativeCore.markRead(msgId)
-        return true
+        // The local write must succeed too (false = the message is gone or
+        // the core failed): the action stays retryable instead of "done".
+        return NativeCore.markRead(msgId)
     }
 
     /** A provider row: id in content://sms (mms=false) or content://mms. */

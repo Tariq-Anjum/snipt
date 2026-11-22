@@ -68,6 +68,8 @@ object NativeCore {
     @JvmStatic external fun bindSend(attemptId: Long, providerId: Long): Boolean
     /** kind: sent|delivery, outcome: ok|failed|unknown -> SendUpdate JSON. */
     @JvmStatic external fun sendPartResult(attemptId: Long, part: Int, kind: String, outcome: String): String?
+    /** Closes the attempt's hand-off (deletable again); handedOff=false marks it failed -> SendUpdate JSON. */
+    @JvmStatic external fun endSend(attemptId: Long, handedOff: Boolean): String?
     /** Monotonic failure for a message whose hand-off failed -> SendUpdate JSON. */
     @JvmStatic external fun failSend(id: Long): String?
     /** Notification action source check -> {msgId, threadId, providerId?, isRead} or null if stale. */
@@ -75,8 +77,10 @@ object NativeCore {
     @JvmStatic external fun markRead(id: Long): Boolean
     @JvmStatic external fun deleteMessage(id: Long): Boolean
     @JvmStatic external fun otpCode(id: Long): String?
-    /** Local (id, providerId) candidates, captured before the provider query. */
+    /** {candidates: [{id, providerId}], tombstones: [id]}, captured before the provider query. */
     @JvmStatic external fun reconcileBegin(): String?
+    /** [providerId] -> those the store neither holds nor deleted locally (explicit import). */
+    @JvmStatic external fun providerMissing(json: String): String?
     @JvmStatic external fun reconcile(json: String): String?
     @JvmStatic external fun emit(event: String)
 

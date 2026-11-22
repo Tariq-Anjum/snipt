@@ -14,7 +14,12 @@ import android.util.Log
  * 1. The core opens a send attempt (`beginSend`, a never-reused id) and the
  *    message becomes `sending`.
  * 2. The provider OUTBOX row is written (the default SMS app must write its
- *    own sent messages) and bound to the attempt once (`bindSend`).
+ *    own sent messages) and bound to the attempt once (`bindSend`). If the
+ *    core refuses the binding, the hand-off is aborted: the OUTBOX row this
+ *    send wrote is deleted, nothing reaches the radio and the message is
+ *    `failed` (R4 #4).
+ * 2b. Until `endSend` closes the hand-off the core refuses to delete the
+ *    message, so a delete can never cascade the attempt away mid hand-off.
  * 3. Every part gets its own sent and delivery PendingIntent, made unique by
  *    a `snipt-send://<attempt>/<part>/<kind>` data URI (so >32 parts and
  *    concurrent sends never share or overwrite one), handled by
@@ -38,6 +43,14 @@ object SmsSender {
     const val EXTRA_REPLY_NOTIF = "replyNotif"
     const val EXTRA_REPLY_TITLE = "replyTitle"
     const val EXTRA_REPLY_TEXT = "replyText"
+
+    /**
+     * Serializes "commit a send result in the core, then mirror it to the
+     * provider row" across all send threads and status callbacks, so the
+     * provider writes happen in core commit order and cannot be left
+     * inconsistent by out-of-order callbacks (R4 #4).
+     */
+    val STATUS_LOCK = Any()
 
     data class Reply(val notifId: Int, val title: String, val text: String)
 
@@ -67,11 +80,14 @@ object SmsSender {
             NativeCore.failSend(id)
             return false
         }
-        var providerId = ProviderSync.writeOutbox(ctx, address, body, subId)
+        val providerId = ProviderSync.writeOutbox(ctx, address, body, subId)
         if (providerId >= 0 && !NativeCore.bindSend(attempt, providerId)) {
-            // The core refused the binding: never update a row it does not own.
-            Log.w(TAG, "provider binding refused")
-            providerId = -1
+            // The core refused the binding: abort before the radio. The row
+            // was written by this send, so removing it touches nothing else.
+            Log.w(TAG, "provider binding refused; hand-off aborted")
+            ProviderSync.delete(ctx, listOf(providerId))
+            NativeCore.endSend(attempt, false)
+            return false
         }
         val sent = ArrayList<PendingIntent>(parts.size)
         val delivered = ArrayList<PendingIntent>(parts.size)
@@ -81,11 +97,14 @@ object SmsSender {
         }
         return try {
             sms.sendMultipartTextMessage(address, null, parts, sent, delivered)
+            NativeCore.endSend(attempt, true)
             true
         } catch (e: Exception) {
             Log.w(TAG, "send rejected: ${e.javaClass.simpleName}")
-            ProviderSync.setType(ctx, providerId, android.provider.Telephony.Sms.MESSAGE_TYPE_FAILED)
-            NativeCore.failSend(id)
+            synchronized(STATUS_LOCK) {
+                NativeCore.endSend(attempt, false)
+                ProviderSync.setType(ctx, providerId, android.provider.Telephony.Sms.MESSAGE_TYPE_FAILED)
+            }
             false
         }
     }

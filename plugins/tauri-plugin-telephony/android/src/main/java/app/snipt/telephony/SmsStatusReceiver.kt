@@ -14,7 +14,9 @@ import org.json.JSONObject
  * state from all stored results and only moves it forward, so callbacks
  * racing on separate threads cannot regress it and nothing lives in process
  * memory. The provider row and an inline-reply notification are updated
- * only when the core reports a state change.
+ * only when the core reports a state change. The core commit and the
+ * provider write run under [SmsSender.STATUS_LOCK], so two callbacks can
+ * never write the provider in the opposite order of their core commits.
  */
 class SmsStatusReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -42,19 +44,22 @@ class SmsStatusReceiver : BroadcastReceiver() {
             SmsSender.ACTION_DELIVERED -> "delivery" to (DeliveryReport.outcome(intent) ?: return)
             else -> return
         }
-        val json = NativeCore.sendPartResult(attempt, part, kind, outcome) ?: return
-        val u = JSONObject(json)
-        if (!u.optBoolean("changed")) return
-        val status = u.optString("status")
-        val pid = if (u.isNull("providerId")) -1L else u.optLong("providerId", -1L)
-        when (status) {
-            "sent", "unconfirmed" -> ProviderSync.setType(ctx, pid, Telephony.Sms.MESSAGE_TYPE_SENT)
-            "delivered" -> {
-                ProviderSync.setType(ctx, pid, Telephony.Sms.MESSAGE_TYPE_SENT)
-                ProviderSync.setDelivered(ctx, pid)
+        val u = synchronized(SmsSender.STATUS_LOCK) {
+            val json = NativeCore.sendPartResult(attempt, part, kind, outcome) ?: return
+            val u = JSONObject(json)
+            if (!u.optBoolean("changed")) return
+            val pid = if (u.isNull("providerId")) -1L else u.optLong("providerId", -1L)
+            when (u.optString("status")) {
+                "sent", "unconfirmed" -> ProviderSync.setType(ctx, pid, Telephony.Sms.MESSAGE_TYPE_SENT)
+                "delivered" -> {
+                    ProviderSync.setType(ctx, pid, Telephony.Sms.MESSAGE_TYPE_SENT)
+                    ProviderSync.setDelivered(ctx, pid)
+                }
+                "failed" -> ProviderSync.setType(ctx, pid, Telephony.Sms.MESSAGE_TYPE_FAILED)
             }
-            "failed" -> ProviderSync.setType(ctx, pid, Telephony.Sms.MESSAGE_TYPE_FAILED)
+            u
         }
+        val status = u.optString("status")
         // Inline reply: report the radio result once, when it leaves "sending".
         val notif = intent.getIntExtra(SmsSender.EXTRA_REPLY_NOTIF, -1)
         if (notif >= 0 && u.optString("previous") == "sending" && status != "sending") {
