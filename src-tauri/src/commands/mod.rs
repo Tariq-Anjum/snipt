@@ -7,18 +7,20 @@ use sms_engine::cleanup::{CleanupBucketId, WeeklyScanReport};
 use sms_engine::inbox::ReminderItem;
 use sms_engine::translate::TranslationResult;
 use sms_store::{
-    InboxCounts, IncomingSms, IngestReport, MessageCursor, OutgoingSms, ProviderRef, SendStatus,
-    ThreadCursor, ThreadPage, ThreadRow,
+    InboxCounts, IngestReport, MessageCursor, OutgoingSms, SendStatus, ThreadCursor, ThreadPage,
+    ThreadRow,
 };
 use sms_types::{BudgetLimits, FinanceSummary, PaymentCycleConfig};
+use std::collections::HashSet;
 use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_telephony::TelephonyExt;
+
 use tauri_plugin_telephony::models::{BackRequest, PowerState, ProviderIds, SendRequest};
 use zeroize::Zeroizing;
 
 use crate::core::{
-    AppSettings, AppState, BackupFile, Capabilities, IncomingResult, MessagesPage, OtpItemView,
-    OutgoingResult, RestoreReport,
+    AppSettings, AppState, BackupFile, Capabilities, MessagesPage, OtpItemView, OutgoingResult,
+    RestoreReport,
 };
 use crate::error::{CmdError, CmdResult};
 use crate::picker;
@@ -73,26 +75,51 @@ async fn native<R: Runtime, T: Send + 'static>(
         .ok()
 }
 
-/// Store first, then the Telephony provider (Android default-SMS app; no-op
-/// on desktop): the provider row of a stored message is marked read too.
+/// Provider rows (Android default-SMS app) changed successfully by a native
+/// mark-read / delete call. Any failure (role lost, provider write refused,
+/// IPC error) leaves the id out, so its local row stays as it was.
+async fn provider_ok<R: Runtime>(app: &AppHandle<R>, ids: Vec<i64>, delete: bool) -> HashSet<i64> {
+    let res = native(app, move |a| {
+        let req = ProviderIds { provider_ids: ids };
+        if delete {
+            a.telephony().provider_delete(req)
+        } else {
+            a.telephony().provider_mark_read(req)
+        }
+    })
+    .await;
+    match res {
+        Some(Ok(r)) => r
+            .results
+            .into_iter()
+            .filter(|x| x.ok)
+            .map(|x| x.provider_id)
+            .collect(),
+        _ => HashSet::new(),
+    }
+}
+
+/// Provider first (Android), then the store: a message whose provider row
+/// could not be marked read stays unread locally and the call fails, so the
+/// UI keeps it retryable instead of reporting a success the next default
+/// SMS app would not see. Desktop has no provider.
 #[tauri::command]
 pub async fn mark_read<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     sms_id: i64,
 ) -> CmdResult<bool> {
-    let (changed, refs) = state
-        .run(move |c| Ok((c.mark_read(sms_id)?, c.provider_refs(&[sms_id])?)))
-        .await?;
-    if changed && !refs.is_empty() {
-        let provider_ids = refs.iter().map(|r| r.provider_id).collect();
-        native(&app, move |a| {
-            a.telephony()
-                .provider_mark_read(ProviderIds { provider_ids })
-        })
-        .await;
+    let refs = state.run(move |c| c.provider_refs(&[sms_id])).await?;
+    if cfg!(target_os = "android") && !refs.is_empty() {
+        let want: Vec<i64> = refs.iter().map(|r| r.provider_id).collect();
+        let ok = provider_ok(&app, want.clone(), false).await;
+        if !want.iter().all(|p| ok.contains(p)) {
+            return Err(CmdError(
+                "Could not mark the message read in the system SMS store; try again.".into(),
+            ));
+        }
     }
-    Ok(changed)
+    state.run(move |c| c.mark_read(sms_id)).await
 }
 
 #[tauri::command]
@@ -110,27 +137,43 @@ pub async fn block(state: State<'_, AppState>, sender: String, blocked: bool) ->
     state.run(move |c| c.block(&sender, blocked)).await
 }
 
-/// Deletes from the store and the matching Telephony provider rows.
+/// Per-row outcome of `delete_messages`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteOutcome {
+    pub deleted: usize,
+    /// Messages kept because their provider row could not be deleted
+    /// (still visible, retryable).
+    pub failed_ids: Vec<i64>,
+}
+
+/// Deletes the Telephony provider rows first (Android), then only those
+/// store rows whose provider row is gone (or that have none). Failed rows
+/// are reported per id and kept.
 #[tauri::command]
 pub async fn delete_messages<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     ids: Vec<i64>,
-) -> CmdResult<usize> {
-    let (n, refs) = state
-        .run(move |c| {
-            let refs = c.provider_refs(&ids)?;
-            Ok((c.delete_messages(&ids)?, refs))
-        })
-        .await?;
-    if !refs.is_empty() {
-        let provider_ids = refs.iter().map(|r| r.provider_id).collect();
-        native(&app, move |a| {
-            a.telephony().provider_delete(ProviderIds { provider_ids })
-        })
-        .await;
+) -> CmdResult<DeleteOutcome> {
+    let lookup = ids.clone();
+    let refs = state.run(move |c| c.provider_refs(&lookup)).await?;
+    let mut failed_ids = Vec::new();
+    if cfg!(target_os = "android") && !refs.is_empty() {
+        let ok = provider_ok(&app, refs.iter().map(|r| r.provider_id).collect(), true).await;
+        failed_ids = refs
+            .iter()
+            .filter(|r| !ok.contains(&r.provider_id))
+            .map(|r| r.id)
+            .collect();
     }
-    Ok(n)
+    let keep: HashSet<i64> = failed_ids.iter().copied().collect();
+    let delete: Vec<i64> = ids.into_iter().filter(|i| !keep.contains(i)).collect();
+    let deleted = state.run(move |c| c.delete_messages(&delete)).await?;
+    Ok(DeleteOutcome {
+        deleted,
+        failed_ids,
+    })
 }
 
 #[tauri::command]
@@ -165,22 +208,25 @@ pub async fn get_settings(state: State<'_, AppState>) -> CmdResult<AppSettings> 
     state.run(|c| c.get_settings()).await
 }
 
-/// Platform receive path (Android receiver via the plugin; dev simulator).
+/// Dev simulator only (registered in debug / `dev-seed` builds): on
+/// Android the receiver ingests natively over JNI, never through the webview.
+#[cfg(any(debug_assertions, feature = "dev-seed"))]
 #[tauri::command]
 pub async fn ingest_incoming(
     state: State<'_, AppState>,
-    message: IncomingSms,
+    message: sms_store::IncomingSms,
     provider_id: Option<i64>,
-) -> CmdResult<IncomingResult> {
+) -> CmdResult<crate::core::IncomingResult> {
     state
         .run(move |c| c.ingest_incoming(&message, provider_id))
         .await
 }
 
 /// Queue in the store, then hand the message to the radio (Android
-/// `SmsManager` via the plugin). The send state advances through
-/// `sending -> sent/failed -> delivered` from the native status receiver; a
-/// rejected hand-off marks it `failed` at once.
+/// `SmsManager` via the plugin, which opens a send attempt and binds its
+/// provider row through the JNI core). Callbacks advance the state
+/// monotonically; a rejected hand-off marks it `failed`. The result carries
+/// the state persisted after the hand-off, not the initial `queued`.
 #[tauri::command]
 pub async fn queue_outgoing<R: Runtime>(
     app: AppHandle<R>,
@@ -188,7 +234,7 @@ pub async fn queue_outgoing<R: Runtime>(
     message: OutgoingSms,
 ) -> CmdResult<OutgoingResult> {
     let sim_slot = message.sim_slot;
-    let out = state.run(move |c| c.queue_outgoing(&message)).await?;
+    let mut out = state.run(move |c| c.queue_outgoing(&message)).await?;
     let req = SendRequest {
         id: out.message.sms.id,
         address: out.message.sms.sender.clone(),
@@ -197,50 +243,16 @@ pub async fn queue_outgoing<R: Runtime>(
     };
     let id = req.id;
     let sent = native(&app, move |a| a.telephony().send(req)).await;
-    if !matches!(sent, Some(Ok(_))) {
-        state
-            .run(move |c| c.set_send_status(id, SendStatus::Failed, None))
-            .await?;
-    }
+    let persisted = state
+        .run(move |c| {
+            if !matches!(sent, Some(Ok(_))) {
+                c.set_send_status(id, SendStatus::Failed)?;
+            }
+            c.send_status(id)
+        })
+        .await?;
+    out.message.send_status = persisted;
     Ok(out)
-}
-
-#[tauri::command]
-pub async fn set_send_status(
-    state: State<'_, AppState>,
-    sms_id: i64,
-    status: SendStatus,
-    provider_id: Option<i64>,
-) -> CmdResult<bool> {
-    state
-        .run(move |c| c.set_send_status(sms_id, status, provider_id))
-        .await
-}
-
-#[tauri::command]
-pub async fn provider_refs(
-    state: State<'_, AppState>,
-    ids: Vec<i64>,
-) -> CmdResult<Vec<ProviderRef>> {
-    state.run(move |c| c.provider_refs(&ids)).await
-}
-
-#[tauri::command]
-pub async fn provider_mark_read(
-    state: State<'_, AppState>,
-    provider_ids: Vec<i64>,
-) -> CmdResult<usize> {
-    state
-        .run(move |c| c.provider_mark_read(&provider_ids))
-        .await
-}
-
-#[tauri::command]
-pub async fn provider_delete(
-    state: State<'_, AppState>,
-    provider_ids: Vec<i64>,
-) -> CmdResult<usize> {
-    state.run(move |c| c.provider_delete(&provider_ids)).await
 }
 
 #[tauri::command]
@@ -470,12 +482,7 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         reminders,
         set_reminder_done,
         get_settings,
-        ingest_incoming,
         queue_outgoing,
-        set_send_status,
-        provider_refs,
-        provider_mark_read,
-        provider_delete,
         finance_summary,
         budget_stats,
         set_cycle,
@@ -494,6 +501,7 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         set_back_handler,
         power_state,
         import_seed,
+        ingest_incoming,
     ]);
     #[cfg(not(any(debug_assertions, feature = "dev-seed")))]
     let b = b.invoke_handler(tauri::generate_handler![
@@ -510,12 +518,7 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         reminders,
         set_reminder_done,
         get_settings,
-        ingest_incoming,
         queue_outgoing,
-        set_send_status,
-        provider_refs,
-        provider_mark_read,
-        provider_delete,
         finance_summary,
         budget_stats,
         set_cycle,

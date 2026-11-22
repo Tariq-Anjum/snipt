@@ -45,6 +45,7 @@ fn advance_status(
         msg_id: sms_id,
         status: if changed { to } else { cur },
         changed,
+        previous: cur,
         provider_id,
     }))
 }
@@ -201,6 +202,8 @@ pub struct SendUpdate {
     pub status: SendStatus,
     /// True when this write moved the status.
     pub changed: bool,
+    /// The stored status before this write.
+    pub previous: SendStatus,
     pub provider_id: Option<i64>,
 }
 

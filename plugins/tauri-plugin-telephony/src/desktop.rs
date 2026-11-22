@@ -52,12 +52,12 @@ impl<R: Runtime> Telephony<R> {
         Ok(PowerState::default())
     }
 
-    pub fn provider_mark_read(&self, _ids: ProviderIds) -> crate::Result<Done> {
-        Ok(Done { ok: false })
+    pub fn provider_mark_read(&self, _ids: ProviderIds) -> crate::Result<ProviderResults> {
+        Err(Error::Unsupported)
     }
 
-    pub fn provider_delete(&self, _ids: ProviderIds) -> crate::Result<Done> {
-        Ok(Done { ok: false })
+    pub fn provider_delete(&self, _ids: ProviderIds) -> crate::Result<ProviderResults> {
+        Err(Error::Unsupported)
     }
 
     pub fn import_inbox(&self) -> crate::Result<ImportResult> {

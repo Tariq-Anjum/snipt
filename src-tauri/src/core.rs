@@ -2,7 +2,6 @@
 //! Every command is a thin async wrapper over a method of [`Core`], so the
 //! command layer is testable without a Tauri window.
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -14,8 +13,8 @@ use sms_engine::inbox::{ActiveOtpItem, InboxFilter, ReminderItem};
 use sms_engine::otp::redact_otp_code;
 use sms_engine::translate::{TranslationResult, translate_sms_to_english};
 use sms_store::{
-    InboxCounts, IncomingSms, IngestReport, MessageCursor, OutgoingSms, ProviderRef, SendStatus,
-    Store, ThreadCursor, ThreadPage, ThreadRow,
+    InboxCounts, IncomingSms, IngestReport, MessageCursor, OutgoingSms, PartKind, PartOutcome,
+    ProviderRef, SendStatus, SendUpdate, Store, ThreadCursor, ThreadPage, ThreadRow,
 };
 use sms_types::{BudgetLimits, FinanceSummary, ParsedSms, PaymentCycleConfig};
 
@@ -36,6 +35,11 @@ const KEY_BUDGET: &str = "budget_limits";
 pub struct Core {
     store: Store,
     vault: OtpVault,
+    /// Android: false until the Keystore-unwrapped key is installed
+    /// ([`Core::set_vault_key`]); vault payloads are neither issued nor
+    /// decrypted before that (they would be bound to a throwaway key). Linux
+    /// uses an ephemeral per-session key by design and is ready at once.
+    vault_ready: bool,
     caps: Capabilities,
 }
 
@@ -112,6 +116,10 @@ pub struct MessageView {
     pub parsed: ParsedSms,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_status: Option<SendStatus>,
+    /// Thread view: the OTP is masked in `sms.body` and `otp.code`; the code
+    /// is only here, encrypted (decrypt with `vault_reveal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub otp_vault: Option<EncryptedOtpPayload>,
 }
 
 impl std::ops::Deref for MessageView {
@@ -190,11 +198,23 @@ pub struct BackupFile {
     pub message_count: usize,
 }
 
+/// A notification action's validated source message.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionTarget {
+    pub msg_id: i64,
+    pub thread_id: i64,
+    pub provider_id: Option<i64>,
+    pub is_read: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ReconcileReport {
     pub deleted: usize,
     pub marked_read: usize,
+    /// Provider inbox ids never ingested (and not deleted locally): replay.
+    pub missing: Vec<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -284,6 +304,7 @@ impl Core {
         Core {
             store,
             vault: OtpVault::new_random(),
+            vault_ready: caps.platform != "android",
             caps,
         }
     }
@@ -316,6 +337,21 @@ impl Core {
     /// decrypting, so this runs before the UI lists vault items.
     pub fn set_vault_key(&mut self, dek: [u8; 32]) {
         self.vault = OtpVault::from_key(dek);
+        self.vault_ready = true;
+    }
+
+    pub fn vault_ready(&self) -> bool {
+        self.vault_ready
+    }
+
+    fn require_vault(&self) -> CmdResult<()> {
+        if self.vault_ready {
+            Ok(())
+        } else {
+            Err(CmdError(
+                "The code vault is still unlocking; try again.".into(),
+            ))
+        }
     }
 
     /// Plaintext OTP of one stored message, for the native "Copy OTP"
@@ -441,9 +477,18 @@ impl Core {
             self.store.send_statuses(&outgoing)?.into_iter().collect();
         Ok(messages
             .into_iter()
-            .map(|parsed| MessageView {
-                send_status: status.get(&parsed.sms.id).copied(),
-                parsed,
+            .map(|mut parsed| {
+                let otp_vault = parsed
+                    .otp
+                    .as_ref()
+                    .filter(|_| self.vault_ready)
+                    .map(|o| self.vault.encrypt_otp(&o.code));
+                redact_parsed(&mut parsed);
+                MessageView {
+                    send_status: status.get(&parsed.sms.id).copied(),
+                    otp_vault,
+                    parsed,
+                }
             })
             .collect())
     }
@@ -538,6 +583,7 @@ impl Core {
         let otp_vault = message
             .otp
             .as_ref()
+            .filter(|_| self.vault_ready)
             .map(|o| self.vault.encrypt_otp(&o.code));
         let otp_expires_at_ms = message
             .otp
@@ -583,18 +629,74 @@ impl Core {
             message: MessageView {
                 parsed,
                 send_status: Some(SendStatus::Queued),
+                otp_vault: None,
             },
             thread,
         })
     }
 
+    /// Monotonic send-state move for failures before an attempt exists
+    /// (rejected hand-off). Returns the persisted state.
     pub fn set_send_status(
         &mut self,
         sms_id: i64,
         status: SendStatus,
-        provider_id: Option<i64>,
-    ) -> CmdResult<bool> {
-        Ok(self.store.set_send_status(sms_id, status, provider_id)?)
+    ) -> CmdResult<Option<SendUpdate>> {
+        Ok(self.store.set_send_status(sms_id, status)?)
+    }
+
+    /// Stored send state of one message (None: not outgoing).
+    pub fn send_status(&self, sms_id: i64) -> CmdResult<Option<SendStatus>> {
+        Ok(self
+            .store
+            .send_statuses(&[sms_id])?
+            .into_iter()
+            .next()
+            .map(|(_, s)| s))
+    }
+
+    pub fn begin_send_attempt(&mut self, sms_id: i64, parts: u32) -> CmdResult<i64> {
+        Ok(self.store.begin_send_attempt(sms_id, parts, now_ms())?)
+    }
+
+    pub fn bind_send_provider(&mut self, attempt_id: i64, provider_id: i64) -> CmdResult<bool> {
+        Ok(self.store.bind_send_provider(attempt_id, provider_id)?)
+    }
+
+    pub fn record_send_part(
+        &mut self,
+        attempt_id: i64,
+        part: u32,
+        kind: PartKind,
+        outcome: PartOutcome,
+    ) -> CmdResult<Option<SendUpdate>> {
+        Ok(self
+            .store
+            .record_send_part(attempt_id, part, kind, outcome)?)
+    }
+
+    /// Validates a notification action against the message it was posted
+    /// for: the message must still exist (ids are never reused, so a deleted
+    /// source never matches again) and its sender must equal `address`.
+    pub fn action_target(&self, sms_id: i64, address: &str) -> CmdResult<Option<ActionTarget>> {
+        let Some(m) = self.store.message(sms_id)? else {
+            return Ok(None);
+        };
+        let want = sms_types::js::trim(address).to_lowercase();
+        if want.is_empty() || m.sms.sender.to_lowercase() != want {
+            return Ok(None);
+        }
+        let provider_id = self
+            .store
+            .provider_refs(&[sms_id])?
+            .first()
+            .map(|r| r.provider_id);
+        Ok(Some(ActionTarget {
+            msg_id: sms_id,
+            thread_id: m.sms.thread_id,
+            provider_id,
+            is_read: m.sms.is_read.unwrap_or(false),
+        }))
     }
 
     pub fn provider_refs(&self, ids: &[i64]) -> CmdResult<Vec<ProviderRef>> {
@@ -612,47 +714,37 @@ impl Core {
         Ok(self.store.provider_delete(provider_ids)?)
     }
 
-    /// Provider -> store sync (Android, on start/resume): `present` is every
-    /// `_id` now in `content://sms`, `read` the ones marked read there.
-    /// Stored provider rows missing from `present` were deleted elsewhere.
-    /// An empty `present` while rows are stored is refused (a failed or
-    /// permission-less provider query must not wipe the inbox).
+    /// Local `(id, providerId)` candidates; captured before the provider
+    /// query of a reconcile pass (Android, on start/resume).
+    pub fn provider_candidates(&self) -> CmdResult<Vec<ProviderRef>> {
+        Ok(self.store.provider_candidates()?)
+    }
+
+    /// Provider -> store sync against the pre-query candidate set (see
+    /// [`Store::provider_reconcile`]): a message received after the snapshot
+    /// is never deleted; `missing` provider inbox rows are replayed by the
+    /// caller.
     pub fn provider_reconcile(
         &mut self,
+        candidates: &[ProviderRef],
         present: &[i64],
         read: &[i64],
+        inbox: &[i64],
     ) -> CmdResult<ReconcileReport> {
-        if present.len() > 10 * MAX_IDS || read.len() > 10 * MAX_IDS {
+        if candidates.len() > 10 * MAX_IDS
+            || present.len() > 10 * MAX_IDS
+            || read.len() > 10 * MAX_IDS
+            || inbox.len() > 10 * MAX_IDS
+        {
             return Err(CmdError::invalid("too many ids"));
         }
-        let stored: Vec<i64> = {
-            let mut st = self
-                .store
-                .connection()
-                .prepare("SELECT provider_id FROM messages WHERE provider_id IS NOT NULL")
-                .map_err(sms_store::StoreError::from)?;
-            st.query_map([], |r| r.get(0))
-                .map_err(sms_store::StoreError::from)?
-                .collect::<Result<Vec<i64>, _>>()
-                .map_err(sms_store::StoreError::from)?
-        };
-        if present.is_empty() && !stored.is_empty() {
-            return Err(CmdError::invalid("empty provider snapshot"));
-        }
-        let present: HashSet<i64> = present.iter().copied().collect();
-        let gone: Vec<i64> = stored
-            .into_iter()
-            .filter(|p| !present.contains(p))
-            .collect();
-        let deleted = if gone.is_empty() {
-            0
-        } else {
-            self.store.provider_delete(&gone)?
-        };
-        let marked_read = self.store.provider_mark_read(read)?;
+        let r = self
+            .store
+            .provider_reconcile(candidates, present, read, inbox)?;
         Ok(ReconcileReport {
-            deleted,
-            marked_read,
+            deleted: r.deleted,
+            marked_read: r.marked_read,
+            missing: r.missing,
         })
     }
 
@@ -675,8 +767,21 @@ impl Core {
 
     // ---- cleanup -------------------------------------------------------
 
+    /// Weekly scan with OTP codes masked in the sample bodies (the scan
+    /// itself is the TS-parity engine; masking happens at the IPC edge).
     pub fn weekly_scan(&self) -> CmdResult<WeeklyScanReport> {
-        Ok(self.store.weekly_scan(now_ms())?)
+        let mut report = self.store.weekly_scan(now_ms())?;
+        for sample in report.buckets.iter_mut().flat_map(|b| b.samples.iter_mut()) {
+            if let Some(code) = self
+                .store
+                .message(sample.sms_id)?
+                .and_then(|m| m.otp)
+                .map(|o| o.code)
+            {
+                sample.body = redact_otp_code(&sample.body, &code);
+            }
+        }
+        Ok(report)
     }
 
     /// Deletes exactly the messages a fresh scan places in the chosen buckets;
@@ -695,6 +800,7 @@ impl Core {
     // ---- OTP vault -----------------------------------------------------
 
     pub fn otp_items(&self) -> CmdResult<Vec<OtpItemView>> {
+        self.require_vault()?;
         let items = self.store.otp_items(now_ms())?;
         Ok(items
             .into_iter()
@@ -715,6 +821,7 @@ impl Core {
     }
 
     pub fn vault_reveal(&self, payload: &EncryptedOtpPayload) -> CmdResult<String> {
+        self.require_vault()?;
         Ok(self.vault.decrypt_otp(payload)?.to_string())
     }
 

@@ -4,18 +4,26 @@
 //! [`AppState::shared`] core (one SQLite connection, one OTP vault) with the
 //! Tauri window when both are alive.
 //!
-//! Rules: every entry point runs inside `catch_unwind` (no panic crosses the
-//! FFI boundary); failures return `null`/`false` and are never logged with
-//! message content; JSON in, JSON out (camelCase, same types as the commands).
+//! Rules:
+//! - Every entry point runs its whole body inside `catch_unwind`: argument
+//!   conversion (`JString` -> `String`, byte arrays), the core call, JSON
+//!   encoding and the `String` -> `jstring` conversion. No panic crosses the
+//!   FFI boundary.
+//! - Failure contract: `null` / `false` / `-1`, never a Java exception. If a
+//!   JNI call failed and left a Java exception pending (e.g. allocation
+//!   failure in `NewStringUTF`), it is cleared before returning, so Kotlin
+//!   callers only ever see the null/false result.
+//! - Nothing is logged; JSON in, JSON out (camelCase, same types as the
+//!   commands).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JString};
-use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jlong, jstring};
+use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong, jstring};
 use serde::{Deserialize, Serialize};
-use sms_store::{IncomingSms, OutgoingSms, SendStatus};
+use sms_store::{IncomingSms, OutgoingSms, PartKind, PartOutcome, SendStatus, SendUpdate};
 use zeroize::Zeroizing;
 
 use crate::core::AppState;
@@ -58,26 +66,57 @@ fn jstr(env: &mut JNIEnv, s: &JString) -> CmdResult<String> {
         .map_err(|_| CmdError::invalid("bad string"))
 }
 
-fn out_json<T: Serialize>(env: &mut JNIEnv, v: &T) -> jstring {
-    match serde_json::to_string(v) {
-        Ok(s) => env
-            .new_string(s)
-            .map(|j| j.into_raw())
-            .unwrap_or(std::ptr::null_mut()),
-        Err(_) => std::ptr::null_mut(),
+fn clear_pending(env: &mut JNIEnv) {
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
     }
 }
 
-/// Runs `f`, turning errors and panics into `None`.
-fn guard<T>(f: impl FnOnce() -> CmdResult<T>) -> Option<T> {
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(Ok(v)) => Some(v),
-        _ => None,
+/// Whole-body guard returning a JSON string (or null).
+fn json_call<'l, T: Serialize>(
+    env: &mut JNIEnv<'l>,
+    f: impl FnOnce(&mut JNIEnv<'l>) -> CmdResult<T>,
+) -> jstring {
+    let r = catch_unwind(AssertUnwindSafe(|| -> Option<jstring> {
+        let v = f(env).ok()?;
+        let s = serde_json::to_string(&v).ok()?;
+        env.new_string(s).ok().map(|j| j.into_raw())
+    }));
+    match r {
+        Ok(Some(p)) => p,
+        _ => {
+            clear_pending(env);
+            std::ptr::null_mut()
+        }
     }
 }
 
-fn to_jbool(v: Option<bool>) -> jboolean {
-    if v == Some(true) { JNI_TRUE } else { JNI_FALSE }
+/// Whole-body guard returning a boolean (false on error/panic).
+fn bool_call<'l>(
+    env: &mut JNIEnv<'l>,
+    f: impl FnOnce(&mut JNIEnv<'l>) -> CmdResult<bool>,
+) -> jboolean {
+    let r = catch_unwind(AssertUnwindSafe(|| f(env)));
+    match r {
+        Ok(Ok(true)) => JNI_TRUE,
+        Ok(Ok(false)) => JNI_FALSE,
+        _ => {
+            clear_pending(env);
+            JNI_FALSE
+        }
+    }
+}
+
+/// Whole-body guard returning a long (-1 on error/panic).
+fn long_call<'l>(env: &mut JNIEnv<'l>, f: impl FnOnce(&mut JNIEnv<'l>) -> CmdResult<i64>) -> jlong {
+    let r = catch_unwind(AssertUnwindSafe(|| f(env)));
+    match r {
+        Ok(Ok(v)) => v,
+        _ => {
+            clear_pending(env);
+            -1
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -90,6 +129,8 @@ struct IngestIn {
 
 /// What the receiver needs to post a notification. `body` is redacted (the
 /// OTP is bullets); the code is fetched only by the Copy OTP action.
+/// `address` is the stored sender: notification actions carry it and the
+/// core re-validates it (`actionTarget`) before acting.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IngestOut {
@@ -98,6 +139,7 @@ struct IngestOut {
     title: String,
     thread_id: i64,
     msg_id: i64,
+    address: String,
     body: String,
     has_otp: bool,
     category: sms_types::Category,
@@ -112,6 +154,7 @@ fn ingest_one(input: &IngestIn) -> CmdResult<IngestOut> {
         title: n.title,
         thread_id: r.thread.thread_id,
         msg_id: n.message.sms.id,
+        address: n.message.sms.sender,
         body: n.message.sms.body,
         has_otp: n.message.otp.is_some(),
         category: r.thread.classification.category,
@@ -120,7 +163,8 @@ fn ingest_one(input: &IngestIn) -> CmdResult<IngestOut> {
 
 /// `init(dbPath, dek)`: open (or join) the shared core; install the
 /// Keystore-unwrapped 32-byte vault key when given. The Java array is copied
-/// into a zeroizing buffer; Kotlin wipes its own copy.
+/// into a zeroizing buffer; Kotlin wipes its own copy. Without a key the
+/// vault stays not-ready (vault calls fail; SMS receipt still works).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_app_snipt_telephony_NativeCore_init<'l>(
     mut env: JNIEnv<'l>,
@@ -128,8 +172,8 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_init<'l>(
     db_path: JString<'l>,
     dek: JByteArray<'l>,
 ) -> jboolean {
-    to_jbool(guard(|| {
-        let path = jstr(&mut env, &db_path)?;
+    bool_call(&mut env, |env| {
+        let path = jstr(env, &db_path)?;
         let st = match STATE.get() {
             Some(s) => s.clone(),
             None => {
@@ -154,7 +198,7 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_init<'l>(
             })?;
         }
         Ok(true)
-    }))
+    })
 }
 
 /// `ingest({message, providerId}) -> IngestOut JSON | null`.
@@ -164,8 +208,8 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_ingest<'l>(
     _class: JClass<'l>,
     json: JString<'l>,
 ) -> jstring {
-    let r = guard(|| {
-        let input: IngestIn = serde_json::from_str(&jstr(&mut env, &json)?)
+    json_call(&mut env, |env| {
+        let input: IngestIn = serde_json::from_str(&jstr(env, &json)?)
             .map_err(|_| CmdError::invalid("ingest json"))?;
         let out = ingest_one(&input)?;
         if out.inserted {
@@ -175,11 +219,7 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_ingest<'l>(
             );
         }
         Ok(out)
-    });
-    match r {
-        Some(v) => out_json(&mut env, &v),
-        None => std::ptr::null_mut(),
-    }
+    })
 }
 
 #[derive(Serialize)]
@@ -191,15 +231,16 @@ struct BatchOut {
 }
 
 /// `ingestBatch([{message, providerId}, ...]) -> {inserted, skipped, failed}`
-/// (first-run provider import; idempotent through provider ids).
+/// (first-run provider import and reconcile replay; idempotent through
+/// provider ids).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_app_snipt_telephony_NativeCore_ingestBatch<'l>(
     mut env: JNIEnv<'l>,
     _class: JClass<'l>,
     json: JString<'l>,
 ) -> jstring {
-    let r = guard(|| {
-        let items: Vec<IngestIn> = serde_json::from_str(&jstr(&mut env, &json)?)
+    json_call(&mut env, |env| {
+        let items: Vec<IngestIn> = serde_json::from_str(&jstr(env, &json)?)
             .map_err(|_| CmdError::invalid("batch json"))?;
         let mut out = BatchOut {
             inserted: 0,
@@ -217,11 +258,7 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_ingestBatch<'l>(
             emit("sms-changed", serde_json::json!({}));
         }
         Ok(out)
-    });
-    match r {
-        Some(v) => out_json(&mut env, &v),
-        None => std::ptr::null_mut(),
-    }
+    })
 }
 
 #[derive(Serialize)]
@@ -233,15 +270,16 @@ struct QueuedOut {
 }
 
 /// `queueOutgoing(OutgoingSms) -> {id, threadId, address} | null`
-/// (notification inline reply, compose trampoline).
+/// (notification inline reply with `threadId` + `address` + `replyTo`,
+/// call-reply service with `address`).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_app_snipt_telephony_NativeCore_queueOutgoing<'l>(
     mut env: JNIEnv<'l>,
     _class: JClass<'l>,
     json: JString<'l>,
 ) -> jstring {
-    let r = guard(|| {
-        let input: OutgoingSms = serde_json::from_str(&jstr(&mut env, &json)?)
+    json_call(&mut env, |env| {
+        let input: OutgoingSms = serde_json::from_str(&jstr(env, &json)?)
             .map_err(|_| CmdError::invalid("outgoing json"))?;
         let q = state()?.with_core(|c| c.queue_outgoing(&input))?;
         emit("sms-changed", serde_json::json!({}));
@@ -250,109 +288,216 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_queueOutgoing<'l>(
             thread_id: q.thread.thread_id,
             address: q.message.sms.sender.clone(),
         })
-    });
-    match r {
-        Some(v) => out_json(&mut env, &v),
-        None => std::ptr::null_mut(),
+    })
+}
+
+fn emit_send(u: &SendUpdate) {
+    if u.changed {
+        emit(
+            "send-status",
+            serde_json::json!({ "id": u.msg_id, "status": u.status.as_str() }),
+        );
     }
 }
 
-/// `setSendStatus(id, status, providerId)`; `providerId < 0` = none.
+/// `beginSend(id, parts) -> attemptId | -1`: opens a send attempt for a
+/// queued message (the message becomes `sending`).
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_app_snipt_telephony_NativeCore_setSendStatus<'l>(
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_beginSend<'l>(
     mut env: JNIEnv<'l>,
     _class: JClass<'l>,
     id: jlong,
-    status: JString<'l>,
-    provider_id: jlong,
-) -> jboolean {
-    to_jbool(guard(|| {
-        let s = jstr(&mut env, &status)?;
-        let st = SendStatus::parse(&s).ok_or_else(|| CmdError::invalid("status"))?;
-        let pid = (provider_id >= 0).then_some(provider_id);
-        let ok = state()?.with_core(|c| c.set_send_status(id, st, pid))?;
+    parts: jint,
+) -> jlong {
+    long_call(&mut env, |_| {
+        let parts = u32::try_from(parts).map_err(|_| CmdError::invalid("parts"))?;
+        let a = state()?.with_core(|c| c.begin_send_attempt(id, parts))?;
         emit(
             "send-status",
-            serde_json::json!({ "id": id, "status": st.as_str() }),
+            serde_json::json!({ "id": id, "status": SendStatus::Sending.as_str() }),
         );
-        Ok(ok)
-    }))
+        Ok(a)
+    })
 }
 
-/// Notification "Mark read".
+/// `bindSend(attemptId, providerId) -> bool`: the provider row of an attempt,
+/// bound once (a different id later is refused).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_bindSend<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    attempt_id: jlong,
+    provider_id: jlong,
+) -> jboolean {
+    bool_call(&mut env, |_| {
+        if provider_id < 0 {
+            return Ok(false);
+        }
+        state()?.with_core(|c| c.bind_send_provider(attempt_id, provider_id))
+    })
+}
+
+/// `sendPartResult(attemptId, part, kind, outcome) -> SendUpdate JSON | null`
+/// with kind `sent|delivery` and outcome `ok|failed|unknown`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_sendPartResult<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    attempt_id: jlong,
+    part: jint,
+    kind: JString<'l>,
+    outcome: JString<'l>,
+) -> jstring {
+    json_call(&mut env, |env| {
+        let part = u32::try_from(part).map_err(|_| CmdError::invalid("part"))?;
+        let kind = match jstr(env, &kind)?.as_str() {
+            "sent" => PartKind::Sent,
+            "delivery" => PartKind::Delivery,
+            _ => return Err(CmdError::invalid("kind")),
+        };
+        let outcome = match jstr(env, &outcome)?.as_str() {
+            "ok" => PartOutcome::Ok,
+            "failed" => PartOutcome::Failed,
+            "unknown" => PartOutcome::Unknown,
+            _ => return Err(CmdError::invalid("outcome")),
+        };
+        let u = state()?
+            .with_core(|c| c.record_send_part(attempt_id, part, kind, outcome))?
+            .ok_or_else(|| CmdError::invalid("attempt"))?;
+        emit_send(&u);
+        Ok(u)
+    })
+}
+
+/// `failSend(id) -> SendUpdate JSON | null`: hand-off failed before or
+/// without callbacks (monotonic; a delivered message stays delivered).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_failSend<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    id: jlong,
+) -> jstring {
+    json_call(&mut env, |_| {
+        let u = state()?
+            .with_core(|c| c.set_send_status(id, SendStatus::Failed))?
+            .ok_or_else(|| CmdError::invalid("id"))?;
+        emit_send(&u);
+        Ok(u)
+    })
+}
+
+/// `actionTarget(id, address) -> {msgId, threadId, providerId?, isRead} | null`:
+/// a notification action's source, only if that message still exists and
+/// was received from `address`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_actionTarget<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    id: jlong,
+    address: JString<'l>,
+) -> jstring {
+    json_call(&mut env, |env| {
+        let address = jstr(env, &address)?;
+        state()?
+            .with_core(|c| c.action_target(id, &address))?
+            .ok_or_else(|| CmdError::invalid("stale action"))
+    })
+}
+
+/// Notification "Mark read" (after the provider row was marked).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_app_snipt_telephony_NativeCore_markRead<'l>(
-    _env: JNIEnv<'l>,
+    mut env: JNIEnv<'l>,
     _class: JClass<'l>,
     id: jlong,
 ) -> jboolean {
-    to_jbool(guard(|| {
+    bool_call(&mut env, |_| {
         let ok = state()?.with_core(|c| c.mark_read(id))?;
         emit("sms-changed", serde_json::json!({}));
         Ok(ok)
-    }))
+    })
 }
 
-/// Notification "Delete" (the provider row is deleted by Kotlin first).
+/// Notification "Delete" (only after the provider row was deleted).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_app_snipt_telephony_NativeCore_deleteMessage<'l>(
-    _env: JNIEnv<'l>,
+    mut env: JNIEnv<'l>,
     _class: JClass<'l>,
     id: jlong,
 ) -> jboolean {
-    to_jbool(guard(|| {
+    bool_call(&mut env, |_| {
         let n = state()?.with_core(|c| c.delete_messages(&[id]))?;
         emit("sms-changed", serde_json::json!({}));
         Ok(n > 0)
-    }))
+    })
 }
 
 /// Notification "Copy OTP": the plaintext code, or null. Kotlin puts it on
 /// the clipboard with EXTRA_IS_SENSITIVE and never logs it.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_app_snipt_telephony_NativeCore_otpCode<'l>(
-    env: JNIEnv<'l>,
+    mut env: JNIEnv<'l>,
     _class: JClass<'l>,
     id: jlong,
 ) -> jstring {
-    match guard(|| state()?.with_core(|c| c.otp_code(id))).flatten() {
-        Some(code) => {
-            let code = Zeroizing::new(code);
-            env.new_string(code.as_str())
-                .map(|j| j.into_raw())
-                .unwrap_or(std::ptr::null_mut())
+    let r = catch_unwind(AssertUnwindSafe(|| -> Option<jstring> {
+        let code = Zeroizing::new(state().ok()?.with_core(|c| c.otp_code(id)).ok()??);
+        env.new_string(code.as_str()).ok().map(|j| j.into_raw())
+    }));
+    match r {
+        Ok(Some(p)) => p,
+        _ => {
+            clear_pending(&mut env);
+            std::ptr::null_mut()
         }
-        None => std::ptr::null_mut(),
     }
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ReconcileIn {
+    /// `(storeId, providerId)` pairs captured by `reconcileBegin` *before*
+    /// the provider was queried.
+    candidates: Vec<sms_store::ProviderRef>,
     present: Vec<i64>,
     read: Vec<i64>,
+    /// Provider inbox ids (subset of `present`) for the missed-row replay.
+    #[serde(default)]
+    inbox: Vec<i64>,
 }
 
-/// `reconcile({present, read}) -> {deleted, markedRead} | null`.
+/// `reconcileBegin() -> [{id, providerId}] | null`: the local candidate set,
+/// captured before the provider query.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_snipt_telephony_NativeCore_reconcileBegin<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jstring {
+    json_call(&mut env, |_| {
+        state()?.with_core(|c| c.provider_candidates())
+    })
+}
+
+/// `reconcile({candidates, present, read, inbox}) -> {deleted, markedRead,
+/// missing: [providerId]} | null`. `missing` = provider inbox rows the
+/// store never ingested (and did not delete): Kotlin replays them.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_app_snipt_telephony_NativeCore_reconcile<'l>(
     mut env: JNIEnv<'l>,
     _class: JClass<'l>,
     json: JString<'l>,
 ) -> jstring {
-    let r = guard(|| {
-        let input: ReconcileIn = serde_json::from_str(&jstr(&mut env, &json)?)
+    json_call(&mut env, |env| {
+        let input: ReconcileIn = serde_json::from_str(&jstr(env, &json)?)
             .map_err(|_| CmdError::invalid("reconcile json"))?;
-        let rep = state()?.with_core(|c| c.provider_reconcile(&input.present, &input.read))?;
+        let rep = state()?.with_core(|c| {
+            c.provider_reconcile(&input.candidates, &input.present, &input.read, &input.inbox)
+        })?;
         if rep.deleted + rep.marked_read > 0 {
             emit("sms-changed", serde_json::json!({}));
         }
         Ok(rep)
-    });
-    match r {
-        Some(v) => out_json(&mut env, &v),
-        None => std::ptr::null_mut(),
-    }
+    })
 }
 
 /// Native UI events with no payload (`back`, `compose`, `sms-changed`).
@@ -363,11 +508,11 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_emit<'l>(
     _class: JClass<'l>,
     event: JString<'l>,
 ) {
-    let _ = guard(|| {
-        let e = jstr(&mut env, &event)?;
+    let _ = bool_call(&mut env, |env| {
+        let e = jstr(env, &event)?;
         if matches!(e.as_str(), "back" | "compose" | "sms-changed") {
             emit(&e, serde_json::json!({}));
         }
-        Ok(())
+        Ok(true)
     });
 }

@@ -63,11 +63,11 @@ impl<R: Runtime> Telephony<R> {
         self.call("powerState", ())
     }
 
-    pub fn provider_mark_read(&self, ids: ProviderIds) -> crate::Result<Done> {
+    pub fn provider_mark_read(&self, ids: ProviderIds) -> crate::Result<ProviderResults> {
         self.call("providerMarkRead", ids)
     }
 
-    pub fn provider_delete(&self, ids: ProviderIds) -> crate::Result<Done> {
+    pub fn provider_delete(&self, ids: ProviderIds) -> crate::Result<ProviderResults> {
         self.call("providerDelete", ids)
     }
 

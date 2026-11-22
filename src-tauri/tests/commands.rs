@@ -3,7 +3,7 @@
 
 use sms_crypto::EncryptedOtpPayload;
 use sms_engine::cleanup::CleanupBucketId;
-use sms_store::{IncomingSms, OutgoingSms, SendStatus, Store};
+use sms_store::{IncomingSms, OutgoingSms, PartKind, PartOutcome, SendStatus, Store};
 use sms_types::{BudgetLimits, PaymentCycleConfig};
 use snipt_lib::core::{AppState, Capabilities, Core, MAX_QUERY_CHARS, platform_capabilities};
 
@@ -148,6 +148,7 @@ fn send_queue_rejected_on_linux_accepted_on_phone() {
         address: None,
         body: "On my way".into(),
         sim_slot: 0,
+        reply_to: None,
     };
     let mut linux = seeded();
     let t = linux
@@ -171,19 +172,22 @@ fn send_queue_rejected_on_linux_accepted_on_phone() {
     let json = serde_json::to_value(&page.messages[0]).unwrap();
     assert_eq!(json["sendStatus"], "queued");
     assert!(json["sms"].is_object(), "flattened ParsedSms shape");
-    assert!(
-        phone
-            .set_send_status(id, SendStatus::Delivered, Some(5))
-            .unwrap()
-    );
+    // Native callbacks advance the state; a late "sent" cannot undo "delivered".
+    let a = phone.begin_send_attempt(id, 1).unwrap();
+    assert!(phone.bind_send_provider(a, 5).unwrap());
+    phone
+        .record_send_part(a, 0, PartKind::Sent, PartOutcome::Ok)
+        .unwrap();
+    phone
+        .record_send_part(a, 0, PartKind::Delivery, PartOutcome::Ok)
+        .unwrap();
+    let u = phone
+        .set_send_status(id, SendStatus::Sent)
+        .unwrap()
+        .unwrap();
+    assert_eq!(u.status, SendStatus::Delivered);
+    assert_eq!(phone.send_status(id).unwrap(), Some(SendStatus::Delivered));
     assert_eq!(phone.provider_refs(&[id]).unwrap()[0].provider_id, 5);
-    assert_eq!(
-        phone.provider_mark_read(&[5]).unwrap(),
-        0,
-        "outgoing is already read"
-    );
-    assert_eq!(phone.provider_delete(&[5]).unwrap(), 1);
-    assert!(phone.provider_delete(&vec![1; 20_001]).is_err());
 }
 
 #[test]
@@ -431,16 +435,43 @@ fn provider_reconcile_deletes_missing_and_marks_read() {
         );
     }
     let before = c.store().message_count().unwrap();
+    let cands = c.provider_candidates().unwrap();
     // a failed/empty provider snapshot must not wipe stored provider rows
-    assert!(c.provider_reconcile(&[], &[]).is_err());
+    assert!(c.provider_reconcile(&cands, &[], &[], &[]).is_err());
     assert_eq!(c.store().message_count().unwrap(), before);
     // 502 deleted elsewhere, 503 read elsewhere
-    let rep = c.provider_reconcile(&[501, 503], &[503]).unwrap();
+    let rep = c
+        .provider_reconcile(&cands, &[501, 503], &[503], &[501, 503])
+        .unwrap();
     assert_eq!((rep.deleted, rep.marked_read), (1, 1));
+    assert!(rep.missing.is_empty());
     assert_eq!(c.store().message_count().unwrap(), before - 1);
     // idempotent
-    let again = c.provider_reconcile(&[501, 503], &[503]).unwrap();
+    let cands = c.provider_candidates().unwrap();
+    let again = c
+        .provider_reconcile(&cands, &[501, 503], &[503], &[501, 503])
+        .unwrap();
     assert_eq!((again.deleted, again.marked_read), (0, 0));
+}
+
+#[test]
+fn notification_action_target_requires_live_message_and_matching_sender() {
+    let mut c = seeded_phone();
+    let r = c
+        .ingest_incoming(&incoming("+15550009", "hello there"), Some(77))
+        .unwrap();
+    let id = r.notification.message.sms.id;
+    let t = c.action_target(id, " +15550009 ").unwrap().unwrap();
+    assert_eq!((t.thread_id, t.provider_id), (r.thread.thread_id, Some(77)));
+    assert!(c.action_target(id, "+15550000").unwrap().is_none());
+    assert!(c.action_target(id, "").unwrap().is_none());
+    c.delete_messages(&[id]).unwrap();
+    assert!(c.action_target(id, "+15550009").unwrap().is_none());
+    // A newer message never takes the deleted id.
+    let r2 = c
+        .ingest_incoming(&incoming("+15550009", "again"), Some(78))
+        .unwrap();
+    assert_ne!(r2.notification.message.sms.id, id);
 }
 
 #[test]
@@ -547,4 +578,65 @@ fn rust_written_backup_round_trips_through_core_and_is_ciphertext() {
     let mut b = Core::new(Store::open_in_memory(0).unwrap());
     let r = b.backup_restore(&f.content, BACKUP_TEST_PASS).unwrap();
     assert_eq!(r.ingest.inserted, f.message_count);
+}
+
+#[test]
+fn thread_pages_and_scan_samples_never_carry_a_plain_otp() {
+    let mut c = seeded();
+    // An expired OTP guarantees a cleanup sample with a code in it.
+    let old = IncomingSms {
+        timestamp_ms: Some(now() - 3 * 86_400_000),
+        ..incoming("VM-HDFCBK", "Your OTP is 731904 for login. Do not share.")
+    };
+    c.ingest_incoming(&old, None).unwrap();
+    let mut otp_msgs = 0;
+    for t in c.store().all_threads().unwrap() {
+        let page = c.messages_page(t.thread_id, None, Some(500)).unwrap();
+        for m in &page.messages {
+            let Some(code) = c.otp_code(m.sms.id).unwrap() else {
+                assert!(m.otp_vault.is_none());
+                continue;
+            };
+            otp_msgs += 1;
+            assert!(!m.sms.body.contains(&code), "body leaks OTP");
+            let otp = m.otp.as_ref().unwrap();
+            assert!(otp.code.chars().all(|ch| ch == '\u{2022}'));
+            let json = serde_json::to_string(m).unwrap();
+            assert!(!json.contains(&code), "IPC JSON leaks OTP");
+            let vault = m.otp_vault.as_ref().expect("vault payload");
+            assert_eq!(c.vault_reveal(vault).unwrap(), code);
+        }
+    }
+    assert!(otp_msgs > 0);
+    let scan = c.weekly_scan().unwrap();
+    let mut otp_samples = 0;
+    for s in scan.buckets.iter().flat_map(|b| b.samples.iter()) {
+        if let Some(code) = c.otp_code(s.sms_id).unwrap() {
+            otp_samples += 1;
+            assert!(!s.body.contains(&code), "cleanup sample leaks OTP");
+        }
+    }
+    assert!(otp_samples > 0);
+}
+
+#[test]
+fn android_vault_is_gated_until_the_keystore_key_is_installed() {
+    let mut c = seeded_phone();
+    assert!(!c.vault_ready());
+    assert!(c.otp_items().is_err());
+    let r = c
+        .ingest_incoming(
+            &incoming("VM-ICICIB", "Your OTP is 551234. Valid 10 min."),
+            None,
+        )
+        .unwrap();
+    assert!(
+        r.notification.otp_vault.is_none(),
+        "no payload under a throwaway key"
+    );
+    c.set_vault_key([7u8; 32]);
+    assert!(c.vault_ready());
+    let items = c.otp_items().unwrap();
+    assert!(!items.is_empty());
+    assert!(c.vault_reveal(&items[0].vault).is_ok());
 }

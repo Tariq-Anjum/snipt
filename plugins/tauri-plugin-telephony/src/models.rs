@@ -96,6 +96,22 @@ pub struct ProviderIds {
     pub provider_ids: Vec<i64>,
 }
 
+/// Outcome of one provider row write (`ok` = verified changed/gone).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRowResult {
+    pub provider_id: i64,
+    pub ok: bool,
+}
+
+/// Per-row results of `providerMarkRead` / `providerDelete`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderResults {
+    #[serde(default)]
+    pub results: Vec<ProviderRowResult>,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
