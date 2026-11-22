@@ -94,7 +94,7 @@ function ImageThumb({ att }: { att: AttachmentMeta }) {
         type="button"
         onClick={() => setOpen(true)}
         aria-label={`View image ${att.name ?? ''}`.trim()}
-        className="block w-fit max-w-full overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800"
+        className="block overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800"
       >
         {url ? (
           <img src={url} alt={att.name ?? 'Image attachment'} className="block max-h-64 max-w-full object-cover" />

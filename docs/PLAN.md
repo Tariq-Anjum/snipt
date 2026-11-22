@@ -156,6 +156,7 @@ Accept: backup created on emulator into Downloads (`adb pull`), restored on Linu
 ### S15 — MMS receive (Opus-impl; owner decides ship-blocking)
 `MmsWapPushReceiver` → `SmsManager.downloadMultimediaMessage` → Rust `mms-pdu` parser (text + image parts) → provider + store.
 Verify: parser unit tests from captured PDU samples; [U] end-to-end needs a carrier — emulator cannot deliver real MMS.
+Status 2026-11-22: implemented (crate `sms-mms`, schema v3, Kotlin download/provider path, UI attachments); evidence and the unverified list in ANDROID-NOTES.md S15. MMS send remains out of scope.
 
 ### S16 — Signed release APK (Sonnet; keystore = owner-run)
 ```bash
