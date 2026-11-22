@@ -25,3 +25,9 @@ Outputs: /tmp/claude-1000/-mnt-MD-AI-tools/a657bbe8-a65c-45ae-9d37-79091d502cbd/
 
 ## Bench
 `cargo run -q --offline --locked -- bench --json`: suite buildbench-v0, total 16, correct 16, accuracy 100.0, correct_abstentions 4/4, unexpected_activations 0, deterministic_three_runs 16, passed true (frozen bench file unchanged; tt-1.1.0 sha256 301e80ce...f6c9 matches provenance).
+
+## Performance on this project (orchestrator assessment, 2026-11-22)
+- Routing itself: 5-6 ms per intent, deterministic, offline; the 16-case bench stayed 16/16 after the extension.
+- It earned its keep once: it exposed a real gap (no `phone` form factor, so an Android phone product could not be routed at all). Fixing that took one Sonnet slice (~75 s agent time) and a 0.3.0 release with 4 new tests.
+- Limits seen: it only picks a pack and a verifier list. It could not express this project's real constraints (privacy, no-network, dual target), could not compose a two-target product, and `tauri-webview` stayed invisible as a candidate. It did not influence the Rust/Tauri choice, the slices or the review gates; those came from Opus's plan and Sol's reviews.
+- Verdict: useful as a cheap sanity gate on "does a pack exist for this target"; not a planning tool yet. Suggested next steps: multi-target intents, constraint fields (privacy/offline), surface framework candidates in the route output.
