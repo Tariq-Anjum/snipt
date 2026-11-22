@@ -407,3 +407,76 @@ fn app_state_async_run_over_file_db_uses_wal() {
     drop(state);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+fn incoming(sender: &str, body: &str) -> IncomingSms {
+    IncomingSms {
+        sender: sender.into(),
+        contact_name: None,
+        body: body.into(),
+        is_known_contact: false,
+        sim_slot: 0,
+        protocol: None,
+        timestamp_ms: None,
+    }
+}
+
+#[test]
+fn provider_reconcile_deletes_missing_and_marks_read() {
+    let mut c = seeded_phone();
+    for (pid, body) in [(501, "hello one"), (502, "hello two"), (503, "hello three")] {
+        assert!(
+            c.ingest_incoming(&incoming("+15550001", body), Some(pid))
+                .unwrap()
+                .inserted
+        );
+    }
+    let before = c.store().message_count().unwrap();
+    // a failed/empty provider snapshot must not wipe stored provider rows
+    assert!(c.provider_reconcile(&[], &[]).is_err());
+    assert_eq!(c.store().message_count().unwrap(), before);
+    // 502 deleted elsewhere, 503 read elsewhere
+    let rep = c.provider_reconcile(&[501, 503], &[503]).unwrap();
+    assert_eq!((rep.deleted, rep.marked_read), (1, 1));
+    assert_eq!(c.store().message_count().unwrap(), before - 1);
+    // idempotent
+    let again = c.provider_reconcile(&[501, 503], &[503]).unwrap();
+    assert_eq!((again.deleted, again.marked_read), (0, 0));
+}
+
+#[test]
+fn platform_status_never_raises_can_send_on_desktop() {
+    let mut c = seeded();
+    let caps = c.apply_platform_status(true, true, 2, false);
+    // the test binary is a desktop build: the radio flag stays off
+    assert!(!caps.can_send && caps.read_only && caps.default_sms_role);
+    assert_eq!(c.apply_platform_status(false, false, 0, false).sim_slots, 1);
+}
+
+#[test]
+fn persistent_vault_key_survives_a_new_core_and_otp_code_is_plain() {
+    let key = [7u8; 32];
+    let mut a = seeded_phone();
+    a.set_vault_key(key);
+    let r = a
+        .ingest_incoming(
+            &incoming(
+                "AX-HDFCBK",
+                "Your OTP is 482913 for HDFC Bank. Do not share.",
+            ),
+            Some(900),
+        )
+        .unwrap();
+    let payload = r.notification.otp_vault.clone().unwrap();
+    assert_eq!(
+        a.otp_code(r.notification.message.sms.id)
+            .unwrap()
+            .as_deref(),
+        Some("482913")
+    );
+    // a second core (e.g. after a restart) with the same Keystore-held DEK
+    let mut b = seeded_phone();
+    assert!(b.vault_reveal(&payload).is_err());
+    b.set_vault_key(key);
+    assert_eq!(b.vault_reveal(&payload).unwrap(), "482913");
+    assert_eq!(a.otp_code(1).unwrap(), None);
+}

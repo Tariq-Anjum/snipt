@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-import-inbox"
+description = "Enables the import_inbox command without any pre-configured scope."
+commands.allow = ["import_inbox"]
+
+[[permission]]
+identifier = "deny-import-inbox"
+description = "Denies the import_inbox command without any pre-configured scope."
+commands.deny = ["import_inbox"]

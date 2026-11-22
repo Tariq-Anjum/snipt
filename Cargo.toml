@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sms-types", "crates/sms-engine", "crates/sms-testdata", "crates/sms-crypto", "crates/sms-store", "src-tauri"]
+members = ["crates/sms-types", "crates/sms-engine", "crates/sms-testdata", "crates/sms-crypto", "crates/sms-store", "src-tauri", "plugins/tauri-plugin-telephony"]
 
 [workspace.package]
 version = "0.1.0"
@@ -30,6 +30,7 @@ sms-engine = { path = "crates/sms-engine" }
 sms-testdata = { path = "crates/sms-testdata" }
 sms-crypto = { path = "crates/sms-crypto" }
 sms-store = { path = "crates/sms-store" }
+tauri-plugin-telephony = { path = "plugins/tauri-plugin-telephony" }
 
 [profile.release]
 debug = false

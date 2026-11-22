@@ -36,3 +36,9 @@ sms-store.workspace = true
 sms-crypto.workspace = true
 sms-testdata.workspace = true
 zeroize.workspace = true
+tauri-plugin-telephony.workspace = true
+
+# JNI bridge for the background SMS receiver (no WebView). Same `jni` version
+# Tauri/wry already link on Android (Cargo.lock), so no second copy is built.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "=0.21.1", default-features = false }

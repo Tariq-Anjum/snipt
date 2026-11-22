@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-display-boost"
+description = "Enables the display_boost command without any pre-configured scope."
+commands.allow = ["display_boost"]
+
+[[permission]]
+identifier = "deny-display-boost"
+description = "Denies the display_boost command without any pre-configured scope."
+commands.deny = ["display_boost"]

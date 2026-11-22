@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-request-default-sms-role"
+description = "Enables the request_default_sms_role command without any pre-configured scope."
+commands.allow = ["request_default_sms_role"]
+
+[[permission]]
+identifier = "deny-request-default-sms-role"
+description = "Denies the request_default_sms_role command without any pre-configured scope."
+commands.deny = ["request_default_sms_role"]

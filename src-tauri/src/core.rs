@@ -2,8 +2,9 @@
 //! Every command is a thin async wrapper over a method of [`Core`], so the
 //! command layer is testable without a Tauri window.
 
+use std::collections::HashSet;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use sms_crypto::{EncryptedOtpPayload, OtpVault};
@@ -51,6 +52,28 @@ impl AppState {
 
     pub fn from_core(core: Core) -> Self {
         AppState(Arc::new(Mutex::new(core)))
+    }
+
+    /// One process-wide core for the Tauri window and the JNI receiver path
+    /// (Android): both open the same DB through one connection and one OTP
+    /// vault. The first caller opens it; later callers get the same handle
+    /// (the path of later calls is ignored, both sides pass the same file).
+    pub fn shared(db_path: impl AsRef<Path>) -> Result<Self, CmdError> {
+        static SHARED: OnceLock<AppState> = OnceLock::new();
+        if let Some(s) = SHARED.get() {
+            return Ok(s.clone());
+        }
+        let opened = Self::open(db_path)?;
+        Ok(SHARED.get_or_init(|| opened).clone())
+    }
+
+    /// Synchronous exclusive access (JNI threads; never the async runtime).
+    pub fn with_core<T>(&self, f: impl FnOnce(&mut Core) -> CmdResult<T>) -> CmdResult<T> {
+        let mut guard = self
+            .0
+            .lock()
+            .map_err(|_| CmdError("internal state poisoned".into()))?;
+        f(&mut guard)
     }
 
     /// Run `f` on a blocking thread with exclusive access to the core.
@@ -167,6 +190,13 @@ pub struct BackupFile {
     pub message_count: usize,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconcileReport {
+    pub deleted: usize,
+    pub marked_read: usize,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreReport {
@@ -256,6 +286,41 @@ impl Core {
 
     pub fn capabilities(&self) -> Capabilities {
         self.caps.clone()
+    }
+
+    /// Android shell report (telephony plugin `status`): role, radio, SIMs.
+    /// `canSend` can only be lowered from the build default, never raised
+    /// (Linux stays read-only whatever a caller claims).
+    pub fn apply_platform_status(
+        &mut self,
+        default_sms_role: bool,
+        can_send: bool,
+        sim_slots: u8,
+        mms: bool,
+    ) -> Capabilities {
+        let base = platform_capabilities();
+        self.caps.default_sms_role = default_sms_role;
+        self.caps.can_send = base.can_send && can_send;
+        self.caps.read_only = !self.caps.can_send;
+        self.caps.sim_slots = sim_slots.clamp(1, 2);
+        self.caps.mms = mms;
+        self.caps.clone()
+    }
+
+    /// Install the persistent OTP-vault data key (Android: unwrapped by the
+    /// Keystore in Kotlin). Payloads issued under the previous key stop
+    /// decrypting, so this runs before the UI lists vault items.
+    pub fn set_vault_key(&mut self, dek: [u8; 32]) {
+        self.vault = OtpVault::from_key(dek);
+    }
+
+    /// Plaintext OTP of one stored message, for the native "Copy OTP"
+    /// notification action only (never sent over IPC).
+    pub fn otp_code(&self, sms_id: i64) -> CmdResult<Option<String>> {
+        Ok(self
+            .store
+            .message(sms_id)?
+            .and_then(|m| m.otp.map(|o| o.code)))
     }
 
     pub fn store(&self) -> &Store {
@@ -541,6 +606,50 @@ impl Core {
     pub fn provider_delete(&mut self, provider_ids: &[i64]) -> CmdResult<usize> {
         check_ids(provider_ids)?;
         Ok(self.store.provider_delete(provider_ids)?)
+    }
+
+    /// Provider -> store sync (Android, on start/resume): `present` is every
+    /// `_id` now in `content://sms`, `read` the ones marked read there.
+    /// Stored provider rows missing from `present` were deleted elsewhere.
+    /// An empty `present` while rows are stored is refused (a failed or
+    /// permission-less provider query must not wipe the inbox).
+    pub fn provider_reconcile(
+        &mut self,
+        present: &[i64],
+        read: &[i64],
+    ) -> CmdResult<ReconcileReport> {
+        if present.len() > 10 * MAX_IDS || read.len() > 10 * MAX_IDS {
+            return Err(CmdError::invalid("too many ids"));
+        }
+        let stored: Vec<i64> = {
+            let mut st = self
+                .store
+                .connection()
+                .prepare("SELECT provider_id FROM messages WHERE provider_id IS NOT NULL")
+                .map_err(sms_store::StoreError::from)?;
+            st.query_map([], |r| r.get(0))
+                .map_err(sms_store::StoreError::from)?
+                .collect::<Result<Vec<i64>, _>>()
+                .map_err(sms_store::StoreError::from)?
+        };
+        if present.is_empty() && !stored.is_empty() {
+            return Err(CmdError::invalid("empty provider snapshot"));
+        }
+        let present: HashSet<i64> = present.iter().copied().collect();
+        let gone: Vec<i64> = stored
+            .into_iter()
+            .filter(|p| !present.contains(p))
+            .collect();
+        let deleted = if gone.is_empty() {
+            0
+        } else {
+            self.store.provider_delete(&gone)?
+        };
+        let marked_read = self.store.provider_mark_read(read)?;
+        Ok(ReconcileReport {
+            deleted,
+            marked_read,
+        })
     }
 
     // ---- finance -------------------------------------------------------

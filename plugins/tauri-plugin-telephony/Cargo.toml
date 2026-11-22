@@ -1,0 +1,19 @@
+[package]
+name = "tauri-plugin-telephony"
+version.workspace = true
+description = "Snipt telephony plugin: default-SMS role, send, provider sync, secure clipboard and window flags (Android). Desktop is a no-op."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# Tauri plugin convention: `links` must equal the crate name (tauri-plugin build).
+links = "tauri-plugin-telephony"
+
+[dependencies]
+tauri = { version = "=2.12.7", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+tauri-plugin = { version = "=2.7.4", features = ["build"] }

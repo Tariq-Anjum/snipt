@@ -11,7 +11,9 @@ use sms_store::{
     ThreadCursor, ThreadPage, ThreadRow,
 };
 use sms_types::{BudgetLimits, FinanceSummary, PaymentCycleConfig};
-use tauri::State;
+use tauri::{AppHandle, Runtime, State};
+use tauri_plugin_telephony::TelephonyExt;
+use tauri_plugin_telephony::models::{BackRequest, PowerState, ProviderIds, SendRequest};
 use zeroize::Zeroizing;
 
 use crate::core::{
@@ -58,9 +60,38 @@ pub async fn search(
         .await
 }
 
+/// Run a blocking native (Kotlin) call off the async runtime. Native
+/// failures are not fatal to the store operation that preceded them.
+async fn native<R: Runtime, T: Send + 'static>(
+    app: &AppHandle<R>,
+    f: impl FnOnce(&AppHandle<R>) -> T + Send + 'static,
+) -> Option<T> {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || f(&app))
+        .await
+        .ok()
+}
+
+/// Store first, then the Telephony provider (Android default-SMS app; no-op
+/// on desktop): the provider row of a stored message is marked read too.
 #[tauri::command]
-pub async fn mark_read(state: State<'_, AppState>, sms_id: i64) -> CmdResult<bool> {
-    state.run(move |c| c.mark_read(sms_id)).await
+pub async fn mark_read<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    sms_id: i64,
+) -> CmdResult<bool> {
+    let (changed, refs) = state
+        .run(move |c| Ok((c.mark_read(sms_id)?, c.provider_refs(&[sms_id])?)))
+        .await?;
+    if changed && !refs.is_empty() {
+        let provider_ids = refs.iter().map(|r| r.provider_id).collect();
+        native(&app, move |a| {
+            a.telephony()
+                .provider_mark_read(ProviderIds { provider_ids })
+        })
+        .await;
+    }
+    Ok(changed)
 }
 
 #[tauri::command]
@@ -78,9 +109,27 @@ pub async fn block(state: State<'_, AppState>, sender: String, blocked: bool) ->
     state.run(move |c| c.block(&sender, blocked)).await
 }
 
+/// Deletes from the store and the matching Telephony provider rows.
 #[tauri::command]
-pub async fn delete_messages(state: State<'_, AppState>, ids: Vec<i64>) -> CmdResult<usize> {
-    state.run(move |c| c.delete_messages(&ids)).await
+pub async fn delete_messages<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+) -> CmdResult<usize> {
+    let (n, refs) = state
+        .run(move |c| {
+            let refs = c.provider_refs(&ids)?;
+            Ok((c.delete_messages(&ids)?, refs))
+        })
+        .await?;
+    if !refs.is_empty() {
+        let provider_ids = refs.iter().map(|r| r.provider_id).collect();
+        native(&app, move |a| {
+            a.telephony().provider_delete(ProviderIds { provider_ids })
+        })
+        .await;
+    }
+    Ok(n)
 }
 
 #[tauri::command]
@@ -127,12 +176,32 @@ pub async fn ingest_incoming(
         .await
 }
 
+/// Queue in the store, then hand the message to the radio (Android
+/// `SmsManager` via the plugin). The send state advances through
+/// `sending -> sent/failed -> delivered` from the native status receiver; a
+/// rejected hand-off marks it `failed` at once.
 #[tauri::command]
-pub async fn queue_outgoing(
+pub async fn queue_outgoing<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     message: OutgoingSms,
 ) -> CmdResult<OutgoingResult> {
-    state.run(move |c| c.queue_outgoing(&message)).await
+    let sim_slot = message.sim_slot;
+    let out = state.run(move |c| c.queue_outgoing(&message)).await?;
+    let req = SendRequest {
+        id: out.message.sms.id,
+        address: out.message.sms.sender.clone(),
+        body: out.message.sms.body.clone(),
+        sim_slot,
+    };
+    let id = req.id;
+    let sent = native(&app, move |a| a.telephony().send(req)).await;
+    if !matches!(sent, Some(Ok(_))) {
+        state
+            .run(move |c| c.set_send_status(id, SendStatus::Failed, None))
+            .await?;
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -267,9 +336,44 @@ pub async fn backup_restore(
         .await
 }
 
+/// Build capabilities, updated on Android with the shell's live status
+/// (default-SMS role, radio, SIM count). Desktop reports the build values.
 #[tauri::command]
-pub async fn capabilities(state: State<'_, AppState>) -> CmdResult<Capabilities> {
+pub async fn capabilities<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> CmdResult<Capabilities> {
+    if cfg!(target_os = "android")
+        && let Some(Ok(s)) = native(&app, |a| a.telephony().status()).await
+    {
+        return state
+            .run(move |c| {
+                Ok(c.apply_platform_status(s.default_sms_role, s.can_send, s.sim_slots, s.mms))
+            })
+            .await;
+    }
     state.run(|c| Ok(c.capabilities())).await
+}
+
+/// Predictive back: the web layer consumes the back gesture only while it
+/// has an overlay or open thread (`back` event); otherwise the system
+/// back-to-home animation runs. No-op on desktop.
+#[tauri::command]
+pub async fn set_back_handler<R: Runtime>(app: AppHandle<R>, enabled: bool) -> CmdResult<()> {
+    native(&app, move |a| {
+        a.telephony().set_back_handler(BackRequest { enabled })
+    })
+    .await;
+    Ok(())
+}
+
+/// Android power-save and thermal status (UI switches to Crisp Solid).
+#[tauri::command]
+pub async fn power_state<R: Runtime>(app: AppHandle<R>) -> CmdResult<PowerState> {
+    match native(&app, |a| a.telephony().power_state()).await {
+        Some(Ok(p)) => Ok(p),
+        _ => Ok(PowerState::default()),
+    }
 }
 
 /// Dev/debug only: rejects unless `debug_assertions` or `dev-seed` is on.
@@ -313,6 +417,8 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         backup_create,
         backup_restore,
         capabilities,
+        set_back_handler,
+        power_state,
         import_seed,
     ]);
     #[cfg(not(any(debug_assertions, feature = "dev-seed")))]
@@ -349,6 +455,8 @@ pub fn register<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
         backup_create,
         backup_restore,
         capabilities,
+        set_back_handler,
+        power_state,
     ]);
     b
 }

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-copy-sensitive"
+description = "Enables the copy_sensitive command without any pre-configured scope."
+commands.allow = ["copy_sensitive"]
+
+[[permission]]
+identifier = "deny-copy-sensitive"
+description = "Denies the copy_sensitive command without any pre-configured scope."
+commands.deny = ["copy_sensitive"]
