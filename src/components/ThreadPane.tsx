@@ -71,6 +71,7 @@ const SEND_STATUS_LABEL: Record<SendStatus, string> = {
   unconfirmed: 'Sent · delivery unconfirmed',
   delivered: 'Delivered',
   failed: 'Not sent',
+  indeterminate: 'Send result unknown',
 };
 
 interface BubbleProps {

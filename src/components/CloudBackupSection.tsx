@@ -29,8 +29,15 @@ interface CloudBackupSectionProps {
   onRestored: (report: RestoreReport) => void;
   /** Linux viewer: restore only (backups are made on the phone). */
   readOnly: boolean;
-  /** Native save/open picker (SAF / file dialog) exists; else download + file input. */
-  nativePicker: boolean;
+  /**
+   * Native save/open picker (SAF / file dialog) exists; else download + file
+   * input. `null` while the platform is still unknown: the controls wait, so
+   * a backup can never take the browser path (whose commands the native
+   * webview is not granted) before capabilities load.
+   */
+  nativePicker: boolean | null;
+  /** Android: explicit re-import of phone inbox rows Snipt never stored. */
+  onImportMissing?: () => Promise<number>;
 }
 
 const MAX_BACKUP_FILE_BYTES = 64 * 1024 * 1024;
@@ -43,6 +50,7 @@ export function CloudBackupSection({
   onRestored,
   readOnly,
   nativePicker,
+  onImportMissing,
 }: CloudBackupSectionProps) {
   const [passphrase, setPassphrase] = useState('');
   const [showPassphrase, setShowPassphrase] = useState(false);
@@ -66,6 +74,7 @@ export function CloudBackupSection({
       return;
     }
 
+    if (nativePicker === null) return;
     setBusy(true);
     try {
       if (nativePicker) {
@@ -103,6 +112,7 @@ export function CloudBackupSection({
   const handleRestoreClick = () => {
     setErrorMessage(null);
     setStatusMessage(null);
+    if (nativePicker === null) return;
     if (!passphrase.trim()) {
       setErrorMessage(
         'Enter the passphrase that locked your .mysms.enc file before choosing it.'
@@ -114,6 +124,25 @@ export function CloudBackupSection({
       return;
     }
     fileInputRef.current?.click();
+  };
+
+  const handleImportMissing = async () => {
+    if (!onImportMissing) return;
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setBusy(true);
+    try {
+      const n = await onImportMissing();
+      setStatusMessage(
+        n > 0
+          ? `Imported ${n.toLocaleString('en-IN')} phone messages Snipt had not stored.`
+          : 'Nothing to import: every phone inbox message is already in Snipt (or was deleted here).'
+      );
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Could not read the phone inbox.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const restoredMessage = (report: RestoreReport, name: string) =>
@@ -293,7 +322,7 @@ export function CloudBackupSection({
             <button
               type="button"
               onClick={handleCreateBackup}
-              disabled={busy}
+              disabled={busy || nativePicker === null}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-500 rounded-lg transition-colors whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5" aria-hidden="true" />
@@ -306,12 +335,25 @@ export function CloudBackupSection({
             <button
               type="button"
               onClick={handleRestoreClick}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
+              disabled={busy || nativePicker === null}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
             >
               <Upload className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Restore Backup</span>
             </button>
+
+            {onImportMissing && (
+              <button
+                type="button"
+                onClick={handleImportMissing}
+                disabled={busy}
+                title="Re-imports phone inbox messages Snipt never stored. Messages you deleted in Snipt stay deleted."
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
+              >
+                <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Import missing messages</span>
+              </button>
+            )}
 
             <input
               ref={fileInputRef}
@@ -323,6 +365,10 @@ export function CloudBackupSection({
             />
           </div>
         </div>
+
+        {nativePicker === null && (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">Starting up…</p>
+        )}
 
         {readOnly && (
           <p className="text-[11px] text-slate-500 dark:text-slate-400">

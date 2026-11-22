@@ -24,7 +24,7 @@ import {
   threadsPage,
   weeklyScan as fetchWeeklyScan,
   DEFAULT_CYCLE_CONFIG,
-  READ_ONLY_CAPABILITIES,
+  PENDING_CAPABILITIES,
   type BudgetCategoryId,
   type BudgetLimits,
   type BudgetPlannerSummary,
@@ -48,6 +48,7 @@ import { devImportSeed } from './api/dev';
 import {
   acquireVaultSecure,
   copySensitive,
+  importMissing,
   onNativeEvents,
   requestDefaultSmsRole,
   setSecure,
@@ -151,7 +152,7 @@ export default function App() {
     () => !glassSupported() || prefersReducedTransparency()
   );
   const [notice, setNotice] = useState<string | null>(null);
-  const [caps, setCaps] = useState<Capabilities>(READ_ONLY_CAPABILITIES);
+  const [caps, setCaps] = useState<Capabilities>(PENDING_CAPABILITIES);
   const platform = caps.platform;
 
   const [version, setVersion] = useState(0);
@@ -216,11 +217,13 @@ export default function App() {
   }, [platform, bump]);
 
   // FLAG_SECURE while the OTP vault screen is showing. Its reveal controls
-  // stay disabled until the native flag is confirmed (vaultSecure).
+  // stay disabled until the native flag is confirmed (vaultSecure), and
+  // nothing is acquired while the platform is still pending (fail closed:
+  // the startup placeholder never counts as a confirmed platform).
   const [vaultSecure, setVaultSecure] = useState(false);
   useEffect(() => {
     setVaultSecure(false);
-    if (activeTab !== 'reminders') return;
+    if (activeTab !== 'reminders' || platform === 'pending') return;
     let release: (() => void) | null = null;
     let live = true;
     acquireVaultSecure(platform).then((r) => {
@@ -338,28 +341,15 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  // 30-second OTP clipboard auto-clear countdown. It starts only after a
-  // successful copy. Android wipes natively (ownership-token checked). The
-  // web/Linux path clears only if the clipboard still holds exactly the code
-  // this copy wrote; if the clipboard cannot be read back, it is left alone
-  // and the user is told the wipe was best-effort.
-  const webClip = useRef<string | null>(null);
+  // 30-second OTP clipboard countdown, shown only after a native Android
+  // copy: the native side wipes exactly that clip (ownership token). The
+  // web/Linux clipboard exposes text only, which cannot prove the clip is
+  // still ours (the same text copied again elsewhere is indistinguishable),
+  // so that path never auto-clears and tells the user instead.
   useEffect(() => {
     if (clipboardClearSecondsLeft === null) return;
     if (clipboardClearSecondsLeft <= 0) {
-      const ours = webClip.current;
-      webClip.current = null;
       setClipboardClearSecondsLeft(null);
-      if (ours !== null) {
-        const clip = navigator.clipboard;
-        (clip?.readText ? clip.readText() : Promise.reject(new Error('unreadable')))
-          .then((now) => (now === ours ? clip.writeText('') : undefined))
-          .catch(() =>
-            setNotice(
-              'Snipt could not check the clipboard, so it left it alone. Clear it yourself if the code is still there.'
-            )
-          );
-      }
       return;
     }
     const id = window.setTimeout(
@@ -471,9 +461,12 @@ export default function App() {
 
   /** Resolves true only when the code really reached the clipboard. */
   const handleCopyOtp = async (code: string): Promise<boolean> => {
+    if (platform === 'pending') {
+      setNotice('Snipt is still starting. Try again in a moment.');
+      return false;
+    }
     const native = await copySensitive(platform, code);
     if (native === 'ok') {
-      webClip.current = null;
       setClipboardClearSecondsLeft(30);
       return true;
     }
@@ -487,8 +480,9 @@ export default function App() {
       setNotice('Could not copy the code.');
       return false;
     }
-    webClip.current = code;
-    setClipboardClearSecondsLeft(30);
+    setNotice(
+      'Code copied. This system cannot confirm the clipboard is still Snipt\'s, so it will not clear it automatically: clear it yourself after use.'
+    );
     return true;
   };
 
@@ -696,7 +690,16 @@ export default function App() {
                   bump();
                 }}
                 readOnly={caps.readOnly}
-                nativePicker={caps.nativePicker}
+                nativePicker={platform === 'pending' ? null : caps.nativePicker}
+                onImportMissing={
+                  platform === 'android'
+                    ? async () => {
+                        const n = await importMissing(platform);
+                        bump();
+                        return n;
+                      }
+                    : undefined
+                }
                 otps={otps}
                 reminders={reminders}
                 remindersLoading={remindersLoading}

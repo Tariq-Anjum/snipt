@@ -29,7 +29,8 @@ interface RemindersViewProps {
   onBackupSuccess: (timestampMs: number) => void;
   onRestored: (report: RestoreReport) => void;
   readOnly: boolean;
-  nativePicker: boolean;
+  nativePicker: boolean | null;
+  onImportMissing?: () => Promise<number>;
   otps: OtpItemView[];
   reminders: ReminderItem[];
   remindersLoading: boolean;
@@ -70,6 +71,7 @@ export function RemindersView({
   onRestored,
   readOnly,
   nativePicker,
+  onImportMissing,
   otps,
   reminders,
   remindersLoading,
@@ -205,6 +207,7 @@ export function RemindersView({
           onRestored={onRestored}
           readOnly={readOnly}
           nativePicker={nativePicker}
+          onImportMissing={onImportMissing}
         />
 
         {/* Section 1: Weekly Useless SMS Scan (Categorized Cleanup) */}

@@ -27,6 +27,8 @@ export async function copySensitive(
   platform: Capabilities['platform'],
   text: string
 ): Promise<CopyResult> {
+  // Platform not known yet: never fall back to the web clipboard (R4 #6).
+  if (platform === 'pending' || (platform === 'android' && !isTauri())) return 'failed';
   if (!onAndroid(platform)) return 'unsupported';
   try {
     await call('plugin:telephony|copy_sensitive', { text, clearAfterMs: 30_000 });
@@ -61,13 +63,16 @@ let vaultHolders = 0;
  * Holds the `vault` FLAG_SECURE scope for a reveal control. Resolves to a
  * release function once the native flag is confirmed on (Android), or null
  * when it could not be confirmed: the caller must keep the code hidden then.
- * Off Android (Linux desktop: no capture protection exists) it resolves at
- * once. Reference-counted across the vault tab and thread reveals.
+ * Fails closed (R4 #6): while the platform is still `pending` (or Android
+ * outside the native runtime) it resolves null. Only a confirmed Linux
+ * desktop / dev browser (no capture protection exists) resolves at once.
+ * Reference-counted across the vault tab and thread reveals.
  */
 export async function acquireVaultSecure(
   platform: Capabilities['platform']
 ): Promise<(() => void) | null> {
-  if (!onAndroid(platform)) return () => {};
+  if (platform === 'linux' || platform === 'web') return () => {};
+  if (!onAndroid(platform)) return null;
   vaultHolders += 1;
   let released = false;
   const release = () => {
@@ -82,6 +87,17 @@ export async function acquireVaultSecure(
     return null;
   }
   return release;
+}
+
+/**
+ * Explicit "import missing messages" (Android): re-imports phone inbox rows
+ * Snipt never stored and did not delete itself. Resolves to the number
+ * imported; rejects when SMS access is missing.
+ */
+export async function importMissing(platform: Capabilities['platform']): Promise<number> {
+  if (!onAndroid(platform)) return 0;
+  const r = await call<{ imported: number }>('plugin:telephony|import_inbox');
+  return r.imported;
 }
 
 export interface ComposeDraft {

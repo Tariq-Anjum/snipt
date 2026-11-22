@@ -85,7 +85,14 @@ export interface ThreadPage {
   next: ThreadCursor | null;
 }
 
-export type SendStatus = 'queued' | 'sending' | 'sent' | 'unconfirmed' | 'delivered' | 'failed';
+export type SendStatus =
+  | 'queued'
+  | 'sending'
+  | 'sent'
+  | 'unconfirmed'
+  | 'delivered'
+  | 'failed'
+  | 'indeterminate';
 
 /**
  * A stored message; outgoing messages queued by Snipt carry a send state.
@@ -152,7 +159,8 @@ export interface RestoreReport {
 }
 
 export interface Capabilities {
-  platform: 'android' | 'linux' | 'web';
+  /** `pending` until the native platform answered (fail closed meanwhile). */
+  platform: 'android' | 'linux' | 'web' | 'pending';
   /** False on Linux (read-only backup viewer): no compose, no quick reply. */
   canSend: boolean;
   readOnly: boolean;
@@ -173,6 +181,17 @@ export const READ_ONLY_CAPABILITIES: Capabilities = {
   mms: false,
   simSlots: 2,
   nativePicker: false,
+};
+
+/**
+ * Startup placeholder until `capabilities()` resolves. Nothing that depends
+ * on the platform may act on it: vault Reveal and sensitive Copy stay
+ * disabled and backup controls wait (R4 #6), so an Android WebView can never
+ * take the Linux / browser path before the native answer arrives.
+ */
+export const PENDING_CAPABILITIES: Capabilities = {
+  ...READ_ONLY_CAPABILITIES,
+  platform: 'pending',
 };
 
 export interface ReminderItem {
