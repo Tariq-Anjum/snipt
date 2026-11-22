@@ -118,33 +118,7 @@ html.dark.amoled body {
  * Zero !important overrides — scoped cleanly via .liquid-glass on <html>.
  * ============================================================================ */
 
-@keyframes liquidDriftA {
-  0%, 100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(3%, -2%, 0) scale(1.04);
-  }
-}
-
-@keyframes liquidDriftB {
-  0%, 100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(-3%, 2.5%, 0) scale(1.05);
-  }
-}
-
-.liquid-ambient-a {
-  animation: liquidDriftA 22s ease-in-out infinite;
-  will-change: transform;
-}
-
-.liquid-ambient-b {
-  animation: liquidDriftB 28s ease-in-out infinite;
-  will-change: transform;
-}
+/* Ambient glow orbs in App.tsx stay static so idle screens render 0 FPS on 90/120 Hz panels. */
 
 /* Blur budget (UI-PLAN 3): at most 3 blurred surfaces on screen (top bar, dock or
  * sidebar, thread header) plus one sheet. Cards, rows and bubbles are a
@@ -326,14 +300,6 @@ html.dark.amoled body {
     rgba(29, 78, 216, 0.96) 0%,
     rgba(30, 64, 175, 0.95) 100%
   );
-}
-
-/* Pause the ambient drift while scrolling or when the window is hidden */
-.is-scrolling .liquid-ambient-a,
-.is-scrolling .liquid-ambient-b,
-.is-hidden .liquid-ambient-a,
-.is-hidden .liquid-ambient-b {
-  animation-play-state: paused;
 }
 
 /* Virtualized rows: isolate layout/style so a row never reflows its siblings */

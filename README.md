@@ -80,13 +80,13 @@ The installer downloads the release assets from GitHub and checks them against t
 ### Look and feel
 - **Liquid Glass** or **Crisp Solid** surfaces; **System / Light / Dark** theme with a **Pure black** OLED mode; status-bar icons follow the theme.
 - **Pinch to resize message text** (the page itself never zooms) or use the Text size slider.
-- Built for 90/120 Hz screens: compositor-only animations, native scrolling, and an automatic drop to Crisp Solid when power saver is on.
+- Built for 90/120 Hz screens: compositor-only animations, native scrolling, zero idle frame ticks (static ambient Liquid Glass glow), and an automatic drop to Crisp Solid when power saver is on.
 
 ## Privacy
 
 Full policy: [PRIVACY.md](PRIVACY.md).
 
-- **No internet permission** on Android. No accounts, analytics, ads or trackers.
+- **No internet or contacts permission** on Android. No accounts, analytics, ads or trackers.
 - Messages are stored in an app-private SQLite database. Android cloud backup of app data is disabled; the only backup is the encrypted file you create yourself.
 - OTP codes are only decrypted when you tap Reveal or Copy, and never appear in notifications.
 - Widgets show no codes, and message previews in widgets can be turned off.
@@ -96,6 +96,7 @@ Full policy: [PRIVACY.md](PRIVACY.md).
 - **RCS**: Google does not let third-party apps use RCS; RCS chats stay in Google Messages, and choosing Snipt as the default SMS app ends them for that number.
 - **MMS**: receive only. Pictures are shown once Android has checked their size; very large images are not displayed. Sending MMS is not supported.
 - Real-carrier coverage so far: Indian banks and UPI apps on one arm64 phone running Android 16. Dual-SIM routing and delivery reports have had limited real-world testing.
+- **Apple (iOS / iPadOS / macOS)**: multiplatform SwiftUI + shared Rust core architecture is planned in [docs/APPLE-ARCHITECTURE.md](docs/APPLE-ARCHITECTURE.md) (paused until Apple build hardware is available).
 
 ## Build from source
 

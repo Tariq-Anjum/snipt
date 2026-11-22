@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Snipt",
   "mainBinaryName": "snipt",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "identifier": "app.snipt.sms",
   "build": {
     "frontendDist": "../web-dist",
@@ -41,7 +41,7 @@
     ],
     "android": {
       "minSdkVersion": 29,
-      "versionCode": 3
+      "versionCode": 4
     }
   }
 }
