@@ -15,7 +15,8 @@ import org.json.JSONObject
  * seconds (as AOSP Messaging writes it). Addr/part sub-tables are addressed
  * as `content://mms/<id>/addr|part` (the getAddrUriForMessage /
  * getPartUriForMessage helpers are API 30; minSdk is 29). Binary part data
- * is streamed into the part row's URI. All-or-nothing: on any failure the
+ * is streamed into the part row's URI; text/plain and application/smil
+ * go to the `text` column (the provider creates no part file for them). All-or-nothing: on any failure the
  * message row is deleted and -1 returned (the core still keeps the message).
  * Logs carry no content.
  */
@@ -88,10 +89,16 @@ object MmsProviderWriter {
                     if (ct == "text/plain") {
                         put(Telephony.Mms.Part.TEXT, p.optString("text", ""))
                         if (p.isNull("charset")) put(Telephony.Mms.Part.CHARSET, CHARSET_UTF8)
+                    } else if (ct == "application/smil") {
+                        // The provider keeps SMIL in `text` (no part file).
+                        val off = p.getInt("offset")
+                        val len = p.getInt("len")
+                        require(off >= 0 && len >= 0 && off + len <= pdu.size)
+                        put(Telephony.Mms.Part.TEXT, String(pdu, off, len, Charsets.UTF_8))
                     }
                 }
                 val u = cr.insert(partUri, pv) ?: error("part")
-                if (ct != "text/plain") {
+                if (ct != "text/plain" && ct != "application/smil") {
                     val off = p.getInt("offset")
                     val len = p.getInt("len")
                     require(off >= 0 && len >= 0 && off + len <= pdu.size)

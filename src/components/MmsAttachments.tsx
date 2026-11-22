@@ -1,5 +1,6 @@
 import { ImageOff, Paperclip, X } from 'lucide-react';
 import { memo, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { mmsImage, type AttachmentMeta } from '../api';
 
 /** Types the core may return; anything else is refused before a blob is made. */
@@ -51,7 +52,9 @@ function Viewer({ att, onClose }: { att: AttachmentMeta; onClose: () => void }) 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-  return (
+  // Portal to <body>: thread rows are transformed (virtualizer), which would
+  // make `position: fixed` relative to the row instead of the viewport.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -77,7 +80,8 @@ function Viewer({ att, onClose }: { att: AttachmentMeta; onClose: () => void }) 
       ) : (
         <span className="text-sm text-white/80">{failed ? 'Image could not be shown.' : 'Loading...'}</span>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -90,7 +94,7 @@ function ImageThumb({ att }: { att: AttachmentMeta }) {
         type="button"
         onClick={() => setOpen(true)}
         aria-label={`View image ${att.name ?? ''}`.trim()}
-        className="block overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800"
+        className="block w-fit max-w-full overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800"
       >
         {url ? (
           <img src={url} alt={att.name ?? 'Image attachment'} className="block max-h-64 max-w-full object-cover" />
