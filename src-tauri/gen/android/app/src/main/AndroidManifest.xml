@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- No INTERNET: Snipt is offline (ARCHITECTURE §10). Assets load through
-         the WebView request interceptor and IPC is in-process; the debug
-         overlay (src/debug) adds INTERNET only for `tauri android dev`. -->
+    <!-- No INTERNET in any build type: Snipt is offline (ARCHITECTURE §10).
+         Bundled assets load through the WebView request interceptor and IPC is
+         in-process (verified on the emulator, S12). `tauri android dev` (live
+         dev server) would need INTERNET; see docs/ANDROID-NOTES.md. -->
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

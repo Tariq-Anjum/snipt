@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PersistableBundle
+import android.util.Log
 
 /**
  * Sensitive copy (OTP): the clip is flagged EXTRA_IS_SENSITIVE (API 33+;
@@ -21,6 +22,7 @@ import android.os.PersistableBundle
 object SecureClipboard {
     const val DEFAULT_CLEAR_MS = 30_000L
     private const val LABEL = "Snipt code"
+    private const val TAG = "SniptClip"
     private const val EXTRA_IS_SENSITIVE_KEY = "android.content.extra.IS_SENSITIVE"
 
     private val main = Handler(Looper.getMainLooper())
@@ -43,12 +45,16 @@ object SecureClipboard {
                 }
             }
             cm.setPrimaryClip(clip)
+            Log.i(TAG, "sensitive clip set; wipe in ${delay / 1000} s")
             val gen = ++generation
             // Arm the change listener after our own change has been dispatched.
             main.postDelayed({
                 if (gen != generation) return@postDelayed
                 val l = ClipboardManager.OnPrimaryClipChangedListener {
-                    if (gen == generation) disarm(cm) // someone else's clip now: keep it
+                    if (gen == generation) {
+                        disarm(cm) // someone else's clip now: keep it
+                        Log.i(TAG, "clipboard changed by user; wipe cancelled")
+                    }
                 }
                 listener = l
                 cm.addPrimaryClipChangedListener(l)
@@ -58,8 +64,9 @@ object SecureClipboard {
                 disarm(cm)
                 try {
                     cm.clearPrimaryClip()
+                    Log.i(TAG, "sensitive clip wiped")
                 } catch (e: Exception) {
-                    // ignore: nothing else we can do
+                    Log.w(TAG, "clip wipe failed: ${e.javaClass.simpleName}")
                 }
             }
             wipe = r

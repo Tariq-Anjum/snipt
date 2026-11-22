@@ -84,8 +84,15 @@ class TelephonyPlugin(private val activity: Activity) : Plugin(activity) {
     override fun load(webView: WebView) {
         this.webView = webView
         val ctx = activity.applicationContext
-        // Keystore DEK into the shared core before the UI lists vault items.
-        Thread { NativeCore.ensure(ctx) }.start()
+        // Keystore DEK into the shared core before the UI lists vault items;
+        // then provider sync. The first onResume of a cold start runs before
+        // the plugin is loaded, and the role may have been granted outside
+        // the app (Settings / adb), so import or reconcile here too.
+        Thread {
+            if (NativeCore.ensure(ctx) && roleHeld()) {
+                if (!ProviderSync.isImported(ctx)) ProviderSync.importInbox(ctx) else ProviderSync.reconcile(ctx)
+            }
+        }.start()
 
         // Predictive back: disabled unless the web layer has something to close.
         (activity as? ComponentActivity)?.let { a ->

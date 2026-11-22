@@ -55,13 +55,14 @@ class NotificationActionReceiver : BroadcastReceiver() {
             }
             Notifier.ACTION_REPLY -> {
                 val text = reply?.trim().orEmpty()
+                var sent = false
                 if (text.isNotEmpty() && threadId >= 0) {
                     val q = NativeCore.queueOutgoing(
                         JSONObject().put("threadId", threadId).put("body", text).put("simSlot", slot).toString()
                     )
                     if (q != null) {
                         val o = JSONObject(q)
-                        SmsSender.send(ctx, o.getLong("id"), o.getString("address"), text, slot)
+                        sent = SmsSender.send(ctx, o.getLong("id"), o.getString("address"), text, slot)
                         // Replying reads the conversation.
                         ProviderSync.markRead(ctx, listOf(providerId))
                         NativeCore.markRead(msgId)
@@ -69,7 +70,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
                         Log.w(TAG, "reply rejected")
                     }
                 }
-                Notifier.cancel(ctx, notifId)
+                Notifier.replied(ctx, notifId, intent.getStringExtra(Notifier.EXTRA_TITLE) ?: "", text, sent)
             }
         }
     }

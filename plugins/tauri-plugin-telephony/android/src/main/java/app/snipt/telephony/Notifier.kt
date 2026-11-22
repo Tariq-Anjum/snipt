@@ -36,6 +36,7 @@ object Notifier {
     const val EXTRA_THREAD_ID = "threadId"
     const val EXTRA_NOTIF_ID = "notifId"
     const val EXTRA_SIM_SLOT = "simSlot"
+    const val EXTRA_TITLE = "title"
 
     fun canPost(ctx: Context): Boolean =
         Build.VERSION.SDK_INT < 33 ||
@@ -72,6 +73,7 @@ object Notifier {
                 .putExtra(EXTRA_THREAD_ID, threadId)
                 .putExtra(EXTRA_NOTIF_ID, notifId)
                 .putExtra(EXTRA_SIM_SLOT, simSlot)
+                .putExtra(EXTRA_TITLE, title)
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or
                 if (mutable) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
             return PendingIntent.getBroadcast(ctx, notifId * 8 + req, i, flags)
@@ -113,6 +115,30 @@ object Notifier {
             NotificationManagerCompat.from(ctx).notify(notifId, b.build())
         } catch (e: SecurityException) {
             // permission revoked between the check and the post
+        }
+    }
+
+    /**
+     * After an inline reply. Android 15+ keeps a replied notification alive
+     * through a plain cancel (FLAG_LIFETIME_EXTENDED_BY_DIRECT_REPLY), so the
+     * app posts a silent update showing the reply, which times out.
+     */
+    fun replied(ctx: Context, notifId: Int, title: String, reply: String, sent: Boolean) {
+        if (!canPost(ctx)) return
+        channels(ctx)
+        val b = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
+            .setSmallIcon(R.drawable.ic_snipt_stat)
+            .setContentTitle(title)
+            .setContentText(ctx.getString(if (sent) R.string.snipt_reply_sent else R.string.snipt_reply_failed))
+            .setRemoteInputHistory(arrayOf<CharSequence>(reply))
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setSilent(true)
+            .setAutoCancel(true)
+            .setTimeoutAfter(4_000)
+        try {
+            NotificationManagerCompat.from(ctx).notify(notifId, b.build())
+        } catch (e: SecurityException) {
+            // permission revoked
         }
     }
 

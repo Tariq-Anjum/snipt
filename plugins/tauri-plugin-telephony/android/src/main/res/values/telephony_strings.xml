@@ -9,4 +9,6 @@
     <string name="snipt_public_message">New message</string>
     <string name="snipt_public_code">New one-time code</string>
     <string name="snipt_code_copied">Code copied; clipboard clears in 30 s</string>
+    <string name="snipt_reply_sent">Reply sent</string>
+    <string name="snipt_reply_failed">Reply not sent</string>
 </resources>
