@@ -83,3 +83,26 @@ None of these touch `sms-engine` or the fixtures; the TS oracle is unchanged
   scan buckets, ids and byte estimates are the engine's (TS-equal) output.
 - **Send state** (`queued < sending < sent < unconfirmed < delivered`,
   `failed`) has no TS counterpart; store.ts outgoing rows have no status.
+
+## Intentional safety deviations (R4 review, 2026-11-22)
+Still no change to `sms-engine` or the fixtures.
+- **Restore presence is a multiset match** on sender (case-insensitive),
+  timestamp, body, direction, SIM slot and transport (NULL protocol = SMS),
+  against rows that existed before the restore only. N identical archive rows
+  against M stored ones insert `max(0, N - M)`; rows differing only by SIM or
+  transport are distinct. Thread mapping follows the matched rows; an archive
+  thread matching messages in several local threads is refused (nothing
+  written).
+- **External ids.** An archive id is kept only when free, `<= 2^40`
+  (`MAX_EXTERNAL_ID`) and not below the allocator's high-water mark (never
+  used or retired locally); otherwise it is remapped. `ingest_batch` (dev seed)
+  refuses explicit ids above `2^40`. TS ids are small, so an empty-store
+  restore of a TS archive still keeps every id (fixture test unchanged).
+- **Schema v4 repair.** High-water marks are seeded from stored maxima on
+  upgrade (a v1 store that deletes its newest row before the first allocation
+  no longer reissues it); ids above `2^40` or non-integer are renumbered.
+- **Send status `indeterminate`**: interrupted hand-off (legacy v1 in-flight
+  send or process death mid hand-off); no TS counterpart.
+- **Clipboard (web/Linux).** No automatic clear: text equality cannot prove
+  the clip is still Snipt's. The TS prototype cleared unconditionally.
+

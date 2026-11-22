@@ -132,3 +132,29 @@ Installed over the S14 build: v1 DB migrated to schema v2 (`user_version=2`, `id
 - Real WAP push delivery, real MMSC download (HTTP, APN, carrier config overrides), NotifyResp acceptance by an MMSC, Dual-SIM subscription routing for downloads, real-world PDUs (carrier quirks, Content-Disposition 1.4, unusual charsets, large images/HEIC), expiry timing against real networks.
 - Retries only fire on app start/resume or the next WAP push (no AlarmManager/JobScheduler); a failed download with the app never opened waits until then (expiry still yields a placeholder).
 - Group-MMS threading, MMS in backups (`.mysms.enc` carries the text body only, no attachments), MMS in the first-run provider import/reconcile (SMS only), video/audio/vCard display (shown as unsupported).
+
+# R4 review fixes (Sol-6.2 re-review, correction #2), 2026-11-22
+
+## What changed on Android
+- **Notification action identity.** Every action PendingIntent has the data URI `snipt-action://<action>/<msgId>/<threadId>` (request code = action index). `Intent.filterEquals` compares data, so actions of different messages never share a PendingIntent and `FLAG_UPDATE_CURRENT` cannot move an older notification's action to a newer target (the old `notifId * 8 + req` collided, e.g. threads 101 and 536871013).
+- **Send hand-off.** `beginSend` opens the attempt with `handoff = 0`; the core refuses to delete that message until `endSend` closes it, so a delete cannot cascade the attempt mid hand-off. A refused `bindSend` aborts before the radio: the OUTBOX row this send wrote is deleted and `endSend(attempt, false)` marks the message failed. `endSend(attempt, true)` after `sendMultipartTextMessage` returned. A hand-off left open by process death is closed on the next first core open; a still-`sending` message without callbacks becomes `indeterminate` ("Send result unknown"; never resent; a late radio callback can still move it). UI deletes report such a message in `failedIds`.
+- **Provider status order.** Core commit + provider write run under `SmsSender.STATUS_LOCK` (status callbacks and the send failure path), so provider writes follow core commit order.
+- **Reconcile.** `reconcileBegin` returns `{candidates, tombstones}`; only tombstones from that pre-query snapshot can be pruned. Replayed rows carry the provider READ flag.
+- **Recovery path for pre-v2 receipts.** "Import missing messages" (Vault & Backup, Android) and the first-run import ingest only provider inbox rows the core neither holds nor tombstoned (`providerMissing`, ignores the v1 replay floor). Rows deleted in Snipt under v1 left no tombstone, so they can come back through this explicit action only; the automatic replay still stays above the floor.
+- **Schema v4.** `send_attempts.handoff`; id high-water marks seeded from the stored maxima; ids above 2^40 or non-integer renumbered with their references; v1 in-flight `sending` rows (no attempt) -> `indeterminate`.
+- **Vault fails closed.** The UI starts with platform `pending`: no vault acquisition, sensitive Copy refused, backup controls disabled until capabilities load.
+
+## Verified on the emulator (android-36 x86_64, debug APK, 2026-11-22 15:36-15:43)
+- Upgrade: the S15 APK (sha256 `1f51b383...`, DB `user_version=3`, 19 messages, `id_alloc` message 1021 / thread 112) replaced with `adb install -r`: `user_version=4`, 19 messages kept, marks unchanged, `send_attempts.handoff` present, first reconcile `deleted=0 markedRead=0 missing=0`, inbox renders. The next received message got id 1021 (1020 was retired).
+- Receive with UI open (provider `_id=23`, msg 1021) and with the process force-stopped (`_id=24`, notification posted by the receiver, no MainActivity; force-stop itself cancels earlier notifications).
+- `dumpsys activity intents`: `dat=snipt-action://mark_read/1022/113`, `.../delete/1022/113`, `.../reply/1022/113`.
+- Inline reply: msg 1023 `delivered`, `send_attempts(1, 1023, parts 1, provider 25, handoff 1)`, `send_part_results` sent=ok + delivery=ok, provider `type=2 status=0`.
+- Notification Mark read: provider `read=1`, DB `is_read=1`. Notification Delete: DB row gone, tombstone 27, notifications cleared.
+- UI open unread thread: DB + provider `read=1`. UI delete: DB row and provider row 21 gone, tombstone 21.
+- FLAG_SECURE: vault tab -> window `SECURE`, screencap all black; back to inbox -> flag cleared, screencap normal.
+- `logcat -b all`: 0 hits for the test bodies.
+
+## Not verified (R4)
+- Delete racing a real hand-off, refused `bindSend`, out-of-order callbacks, interrupted hand-off recovery: unit tests only (`crates/sms-store/tests/r4.rs`); not reproducible with adb timing.
+- "Import missing messages" button on the device (the shell cannot write `content://sms` to create a missed row); store logic unit-tested.
+- Pending-capabilities window on the device (the native answer arrives before a human can tap); covered by `src/api/telephony.test.ts`.
