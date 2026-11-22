@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "mobile",
-  "description": "Least-privilege capability for the Android main window: core defaults (IPC, events) and the telephony plugin's default set (role request, status, sensitive copy, FLAG_SECURE, display boost, provider import). No shell, no fs, no network.",
+  "description": "Least-privilege capability for the Android main window: core defaults (IPC, events), the app commands the UI uses (set 'ui', explicit app ACL) and the telephony plugin's default set (role request, status, sensitive copy, FLAG_SECURE, display boost, provider import). No shell, no fs, no network.",
   "windows": [
     "main"
   ],
@@ -10,6 +10,7 @@
   ],
   "permissions": [
     "core:default",
+    "ui",
     "telephony:default"
   ]
 }

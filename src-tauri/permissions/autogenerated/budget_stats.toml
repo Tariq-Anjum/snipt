@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-budget-stats"
+description = "Enables the budget_stats command without any pre-configured scope."
+commands.allow = ["budget_stats"]
+
+[[permission]]
+identifier = "deny-budget-stats"
+description = "Denies the budget_stats command without any pre-configured scope."
+commands.deny = ["budget_stats"]

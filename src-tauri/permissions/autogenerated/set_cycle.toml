@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-cycle"
+description = "Enables the set_cycle command without any pre-configured scope."
+commands.allow = ["set_cycle"]
+
+[[permission]]
+identifier = "deny-set-cycle"
+description = "Denies the set_cycle command without any pre-configured scope."
+commands.deny = ["set_cycle"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-queue-outgoing"
+description = "Enables the queue_outgoing command without any pre-configured scope."
+commands.allow = ["queue_outgoing"]
+
+[[permission]]
+identifier = "deny-queue-outgoing"
+description = "Denies the queue_outgoing command without any pre-configured scope."
+commands.deny = ["queue_outgoing"]

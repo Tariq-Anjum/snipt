@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-otp-items"
+description = "Enables the otp_items command without any pre-configured scope."
+commands.allow = ["otp_items"]
+
+[[permission]]
+identifier = "deny-otp-items"
+description = "Denies the otp_items command without any pre-configured scope."
+commands.deny = ["otp_items"]

@@ -1,0 +1,42 @@
+# Commands the Snipt web UI uses (the only app commands the webview may call).
+# Not granted: backup_create / backup_restore (ciphertext through JS; the
+# Tauri UI uses the native-picker commands backup_save / backup_restore_picked).
+# import_seed / ingest_incoming are granted for the dev simulator but are only
+# registered in debug / `dev-seed` builds, so a release build has no handler.
+
+[[set]]
+identifier = "ui"
+description = "Commands used by the Snipt UI."
+permissions = [
+  "allow-threads-page",
+  "allow-messages-page",
+  "allow-search",
+  "allow-mark-read",
+  "allow-star",
+  "allow-archive",
+  "allow-block",
+  "allow-delete-messages",
+  "allow-get-thread",
+  "allow-inbox-counts",
+  "allow-reminders",
+  "allow-set-reminder-done",
+  "allow-get-settings",
+  "allow-queue-outgoing",
+  "allow-finance-summary",
+  "allow-budget-stats",
+  "allow-set-cycle",
+  "allow-set-budget",
+  "allow-weekly-scan",
+  "allow-apply-cleanup",
+  "allow-purge-expired-otps",
+  "allow-otp-items",
+  "allow-vault-reveal",
+  "allow-translate",
+  "allow-backup-save",
+  "allow-backup-restore-picked",
+  "allow-capabilities",
+  "allow-set-back-handler",
+  "allow-power-state",
+  "allow-import-seed",
+  "allow-ingest-incoming",
+]
