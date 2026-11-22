@@ -45,6 +45,14 @@ import {
   type WeeklyScanReport,
 } from './api';
 import { devImportSeed } from './api/dev';
+import {
+  copySensitive,
+  onNativeEvents,
+  requestDefaultSmsRole,
+  setSecure,
+  takeComposeDraft,
+  type ComposeDraft,
+} from './api/telephony';
 import { FinanceView } from './components/FinanceView';
 import { InboxView } from './components/InboxView';
 import { NotificationBanner } from './components/NotificationBanner';
@@ -180,11 +188,42 @@ export default function App() {
     });
 
   // ---- platform + back-stack --------------------------------------------
-  useEffect(() => {
+  const refreshCaps = useCallback(() => {
     capabilities()
       .then(setCaps)
       .catch(() => {});
   }, []);
+  useEffect(refreshCaps, [refreshCaps]);
+
+  // Android: receivers / notification actions change the store with the UI
+  // open; a draft from another app (SENDTO) opens the compose sheet.
+  const [draft, setDraft] = useState<ComposeDraft | null>(null);
+  useEffect(() => {
+    if (platform !== 'android') return;
+    const pull = () => takeComposeDraft(platform).then((d) => d && setDraft(d));
+    pull();
+    return onNativeEvents({
+      'sms-received': bump,
+      'sms-changed': bump,
+      'send-status': bump,
+      compose: pull,
+    });
+  }, [platform, bump]);
+
+  // FLAG_SECURE while the OTP vault screen is showing.
+  useEffect(() => {
+    setSecure(platform, 'vault', activeTab === 'reminders');
+  }, [platform, activeTab]);
+
+  const handleRequestRole = async () => {
+    try {
+      await requestDefaultSmsRole(platform);
+    } catch {
+      setNotice('Snipt could not open the default SMS app setting.');
+    }
+    refreshCaps();
+    bump();
+  };
 
   useEffect(() => subscribeBack((depth) => setBackHandler(depth > 0, platform)), [platform]);
 
@@ -272,7 +311,7 @@ export default function App() {
   useEffect(() => {
     if (clipboardClearSecondsLeft === null) return;
     if (clipboardClearSecondsLeft <= 0) {
-      navigator.clipboard?.writeText('').catch(() => {});
+      if (platform !== 'android') navigator.clipboard?.writeText('').catch(() => {});
       setClipboardClearSecondsLeft(null);
       return;
     }
@@ -281,7 +320,7 @@ export default function App() {
       1000
     );
     return () => window.clearTimeout(id);
-  }, [clipboardClearSecondsLeft]);
+  }, [clipboardClearSecondsLeft, platform]);
 
   // ---- data -----------------------------------------------------------------
   // Billing cycles are owned by the core.
@@ -384,7 +423,11 @@ export default function App() {
   };
 
   const handleCopyOtp = (code: string) => {
-    navigator.clipboard?.writeText(code).catch(() => {});
+    // Android: native sensitive clip + cancel-safe 30 s wipe; the countdown
+    // below is display-only there (its web clipboard write is skipped).
+    copySensitive(platform, code).then((native) => {
+      if (!native) navigator.clipboard?.writeText(code).catch(() => {});
+    });
     setClipboardClearSecondsLeft(30);
   };
 
@@ -610,6 +653,41 @@ export default function App() {
             onQuickReply={caps.canSend ? handleQuickReply : undefined}
           />
 
+          {platform === 'android' && !caps.defaultSmsRole && (
+            <div
+              role="region"
+              aria-label="Default SMS app"
+              className="fixed top-[calc(var(--inset-top,0px)+3.5rem)] left-4 right-4 md:left-auto md:right-6 md:w-96 z-40 px-4 py-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 shadow-lg"
+            >
+              <p className="font-semibold">Make Snipt your SMS app</p>
+              <p className="mt-1 text-slate-600 dark:text-slate-300">
+                Android lets only the default SMS app receive, send and delete messages. RCS
+                chats stay in Google Messages and end there when you switch; MMS is not supported
+                yet.
+              </p>
+              <button
+                type="button"
+                onClick={handleRequestRole}
+                className="mt-2 px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-900 font-semibold"
+              >
+                Set as default
+              </button>
+            </div>
+          )}
+
+          {draft && (
+            <DraftSheet
+              draft={draft}
+              canSend={caps.canSend}
+              onCancel={() => setDraft(null)}
+              onSend={async (address, body) => {
+                await queueOutgoing({ address, body, simSlot: 0 });
+                setDraft(null);
+                bump();
+              }}
+            />
+          )}
+
           {notice && (
             <div
               role="status"
@@ -621,5 +699,70 @@ export default function App() {
         </div>
       </MotionConfig>
     </LazyMotion>
+  );
+}
+
+function DraftSheet({
+  draft,
+  canSend,
+  onCancel,
+  onSend,
+}: {
+  draft: ComposeDraft;
+  canSend: boolean;
+  onCancel: () => void;
+  onSend: (address: string, body: string) => Promise<void>;
+}) {
+  const [address, setAddress] = useState(draft.address);
+  const [body, setBody] = useState(draft.body);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useBackLayer(true, onCancel);
+  const ready = canSend && address.trim() !== '' && body.trim() !== '' && !busy;
+  return (
+    <div
+      role="dialog"
+      aria-label="New message"
+      className="fixed inset-x-4 bottom-[calc(var(--inset-bottom,0px)+1rem)] md:left-auto md:right-6 md:w-96 z-50 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 shadow-xl text-sm"
+    >
+      <p className="font-semibold mb-2">New message</p>
+      <input
+        aria-label="To"
+        value={address}
+        onChange={(e) => setAddress(e.target.value)}
+        maxLength={128}
+        inputMode="tel"
+        placeholder="To"
+        className="w-full mb-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent"
+      />
+      <textarea
+        aria-label="Message"
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        rows={3}
+        placeholder="Message"
+        className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent"
+      />
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      <div className="mt-2 flex justify-end gap-2">
+        <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded-lg">
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={!ready}
+          onClick={() => {
+            setBusy(true);
+            onSend(address.trim(), body).catch(() => {
+              setError('Could not send this message.');
+              setBusy(false);
+            });
+          }}
+          className="px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-900 font-semibold disabled:opacity-40"
+        >
+          Send
+        </button>
+      </div>
+    </div>
   );
 }
