@@ -1,0 +1,8 @@
+# Incident: session killed by kernel OOM (2026-11-22 05:16 IST)
+
+**Symptom:** herdr "crashed", Claude Code session + two background jobs (Opus S12 agent, Sol R2 review) ended mid-run.
+**Verdict (evidence, not herdr bug):** herdr did not crash. Its server log shows `server shutdown initiated reason=SIGTERM` at 23:46:38 UTC (05:16:38 IST), a clean shutdown with panes hung up and session saved; a new server was started by hand at 09:55 IST.
+**Cause (fact, kernel journal):** `kswapd0 invoked oom-killer` at 05:16:38 IST, global OOM, RAM 14 GiB full and swap 188 kB free of 15 GiB. Victim: `script` pid 100823, anon-rss 10.2 GB (total-vm 16.7 GB, oom_score_adj 200) inside `app-ghostty-surface-transient-3622.scope` (the Ghostty window hosting the herdr client). That scope peaked at 11.7 GB RAM + 12.8 GB swap over 1h45m. systemd then marked the scope failed (oom-kill) and the herdr server got SIGTERM in the same second.
+**Not established (inference):** why a `script` PTY wrapper grew to 10 GB (unbounded buffering of terminal output in that window; no capture file was found on disk). No core dump, no herdr panic. Other memory load at the time: long emulator/Gradle/cargo builds by sub-agents.
+**Impact:** work in git was safe (all slices committed); S12 (Opus, Android plugin) left no commits or files; R2 review output survived on disk.
+**Mitigations adopted:** run Android builds with bounded parallelism (CARGO_BUILD_JOBS, Gradle workers), one emulator at a time with `-memory 2048`, no huge output to the terminal; monitor `free -h` between slices; relaunch lost jobs as harness-tracked background tasks. Owner may want to check why `script` is wrapping the herdr terminal (`pgrep -a script` after login) and cap it (e.g. `systemd-run --user -p MemoryMax=4G`).
