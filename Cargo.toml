@@ -35,6 +35,7 @@ tauri-plugin-telephony = { path = "plugins/tauri-plugin-telephony" }
 
 [profile.release]
 debug = false
+strip = "symbols"
 
 # Dependencies (crypto, SQLite) optimised in dev/test builds so PBKDF2 and
 # bundled SQLite run at realistic speed under `cargo test`.

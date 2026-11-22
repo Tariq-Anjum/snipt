@@ -14,8 +14,28 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release signing (S16). Secrets live outside git: SNIPT_KEYSTORE_PROPS or
+// ~/.config/mysms-signing/keystore.properties (storeFile, storePassword, keyAlias, keyPassword).
+val keystorePropsFile = File(
+    System.getenv("SNIPT_KEYSTORE_PROPS")
+        ?: "${System.getProperty("user.home")}/.config/mysms-signing/keystore.properties"
+)
+val releaseRequested = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+val keystoreProps = Properties()
+if (keystorePropsFile.isFile) {
+    keystorePropsFile.inputStream().use { keystoreProps.load(it) }
+} else if (releaseRequested) {
+    throw GradleException(
+        "Snipt release signing: keystore properties not found at ${keystorePropsFile.path}. " +
+            "Run scripts/make-keystore.sh or set SNIPT_KEYSTORE_PROPS."
+    )
+}
+// Release ABI: arm64-v8a (owner's phone) unless SNIPT_ABI overrides (e.g. x86_64 for emulator smoke).
+val sniptAbi = System.getenv("SNIPT_ABI") ?: "arm64-v8a"
+
 android {
     compileSdk = 37
+    ndkVersion = "29.0.14206865"
     namespace = "app.snipt.sms"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
@@ -24,6 +44,16 @@ android {
         targetSdk = 37
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (keystoreProps.containsKey("storeFile")) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -39,6 +69,10 @@ android {
             }
         }
         getByName("release") {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+            ndk { abiFilters.clear(); abiFilters.add(sniptAbi) }
+            isMinifyEnabled = true
+            isShrinkResources = true
             optimization {
                enable = true
             }
