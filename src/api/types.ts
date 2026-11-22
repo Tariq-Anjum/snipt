@@ -95,7 +95,25 @@ export type SendStatus = 'queued' | 'sending' | 'sent' | 'unconfirmed' | 'delive
 export type MessageView = ParsedSms & {
   sendStatus?: SendStatus;
   otpVault?: EncryptedOtpPayload;
+  /** MMS attachments (S15): metadata only; bytes via `mms_image`. */
+  attachments?: AttachmentMeta[];
 };
+
+/** A non-text MMS part. `image` parts are displayable (type checked by magic bytes). */
+export interface AttachmentMeta {
+  id: number;
+  kind: 'image' | 'unsupported';
+  contentType: string;
+  name?: string | null;
+  size: number;
+  hasThumb: boolean;
+}
+
+/** `mms_image`: allow-listed image bytes, base64 (turned into a blob: URL). */
+export interface MmsImage {
+  contentType: string;
+  dataB64: string;
+}
 
 /** `delete_messages`: rows whose provider row could not be deleted are kept. */
 export interface DeleteOutcome {

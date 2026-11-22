@@ -5,6 +5,7 @@ import type {
   IncomingSms,
   MessageCursor,
   MessagesPage,
+  MmsImage,
   OutgoingResult,
   OutgoingSms,
   TranslationResult,
@@ -38,6 +39,11 @@ export function deleteMessages(ids: number[]): Promise<DeleteOutcome> {
  */
 export function queueOutgoing(message: OutgoingSms): Promise<OutgoingResult> {
   return call('queue_outgoing', { message });
+}
+
+/** MMS image attachment bytes (thumbnail or full size); never a path or URI. */
+export function mmsImage(partId: number, thumb: boolean): Promise<MmsImage> {
+  return call('mms_image', { partId, thumb });
 }
 
 /** Dev simulator only (debug builds); Android receipt is native. */

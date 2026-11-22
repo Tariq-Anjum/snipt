@@ -40,6 +40,7 @@ import {
   type ThreadRow,
 } from '../api';
 import { acquireVaultSecure } from '../api/telephony';
+import { MmsAttachments } from './MmsAttachments';
 import { useThreadMessages, useTranslation } from '../hooks/data';
 import { CATEGORY_LIST } from '../engine/types';
 import { formatSenderKindLabel } from '../engine/dlt';
@@ -179,6 +180,10 @@ const Bubble = memo(function Bubble({
               {sms.rcsRichCard.subtitle}
             </div>
           </div>
+        )}
+
+        {parsed.attachments && parsed.attachments.length > 0 && (
+          <MmsAttachments attachments={parsed.attachments} />
         )}
 
         <p
