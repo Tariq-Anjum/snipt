@@ -38,8 +38,8 @@ pub const IMAGE_TYPES: &[&str] = &[
 
 const MAX_LOCATION_CHARS: usize = 2048;
 
-/// (kind, content_type, data, thumb)
-type PartRow = (String, String, Option<Vec<u8>>, Option<Vec<u8>>);
+/// (kind, content_type, data, thumb, display_ok)
+type PartRow = (String, String, Option<Vec<u8>>, Option<Vec<u8>>, bool);
 
 /// A new M-Notification.ind.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -138,6 +138,11 @@ fn row_pending(r: &rusqlite::Row<'_>) -> rusqlite::Result<PendingMms> {
     })
 }
 
+/// A download attempt older than this without a callback is presumed lost.
+const INFLIGHT_TIMEOUT_MS: i64 = 10 * 60 * 1000;
+/// Completed MMS dedupe records are kept this long.
+const DEDUPE_KEEP_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
 const PENDING_COLS: &str = "pending_id, transaction_id, location, sender, sub_id, sim_slot,
     received_ms, expiry_ms, attempts, state";
 
@@ -162,6 +167,11 @@ impl Store {
             return Err(StoreError::Invalid("simSlot must be 0 or 1"));
         }
         let tx = crate::write_tx(&mut self.conn)?;
+        // Completed dedupe records are bounded (R5 #6).
+        tx.prepare_cached(
+            "DELETE FROM mms_pending WHERE state IN ('done', 'failed') AND received_ms < ?1",
+        )?
+        .execute([n.received_ms - DEDUPE_KEEP_MS])?;
         tx.prepare_cached(
             "INSERT OR IGNORE INTO mms_pending(transaction_id, location, sender, sub_id, sim_slot,
                 received_ms, expiry_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -177,9 +187,11 @@ impl Store {
         ])?;
         let p = tx
             .prepare_cached(&format!(
-                "SELECT {PENDING_COLS} FROM mms_pending WHERE transaction_id = ?1"
+                "SELECT {PENDING_COLS} FROM mms_pending
+                 WHERE transaction_id = ?1 AND location = ?2
+                   AND COALESCE(sub_id, -1) = COALESCE(?3, -1)"
             ))?
-            .query_row([&tid], row_pending)?;
+            .query_row(params![&tid, loc, n.sub_id], row_pending)?;
         tx.commit()?;
         let action = if p.state == "pending" {
             NoticeAction::Download
@@ -199,13 +211,14 @@ impl Store {
             .optional()?)
     }
 
-    /// Count one download attempt (before handing it to the platform).
-    pub fn mms_attempt(&mut self, pending_id: i64) -> Result<i64> {
+    /// Count one download attempt (before handing it to the platform) and
+    /// mark it in flight until it fails or completes (R5 #5).
+    pub fn mms_attempt(&mut self, pending_id: i64, now_ms: i64) -> Result<i64> {
         let tx = crate::write_tx(&mut self.conn)?;
         let n = tx.execute(
-            "UPDATE mms_pending SET attempts = attempts + 1
+            "UPDATE mms_pending SET attempts = attempts + 1, inflight_ms = ?2
              WHERE pending_id = ?1 AND state = 'pending'",
-            [pending_id],
+            params![pending_id, now_ms],
         )?;
         if n == 0 {
             return Err(StoreError::Invalid("not a pending MMS"));
@@ -227,6 +240,7 @@ impl Store {
             "SELECT {PENDING_COLS} FROM mms_pending
              WHERE state = 'pending' AND attempts < ?1
                AND (expiry_ms IS NULL OR expiry_ms > ?2)
+               AND (inflight_ms IS NULL OR inflight_ms <= ?2 - {INFLIGHT_TIMEOUT_MS})
              ORDER BY pending_id LIMIT 20"
         ))?;
         let v = st
@@ -242,6 +256,7 @@ impl Store {
             "SELECT {PENDING_COLS} FROM mms_pending
              WHERE state = 'pending' AND (attempts >= ?1
                OR (expiry_ms IS NOT NULL AND expiry_ms <= ?2))
+               AND (inflight_ms IS NULL OR inflight_ms <= ?2 - {INFLIGHT_TIMEOUT_MS})
              ORDER BY pending_id LIMIT 20"
         ))?;
         let v = st
@@ -258,6 +273,11 @@ impl Store {
         if p.state != "pending" {
             return Ok(FailOutcome::Ignored);
         }
+        // The attempt is over: maintenance may finalize it now.
+        self.conn.execute(
+            "UPDATE mms_pending SET inflight_ms = NULL WHERE pending_id = ?1",
+            [pending_id],
+        )?;
         let expired = p.expiry_ms.is_some_and(|e| e <= now_ms);
         Ok(if expired || p.attempts >= MAX_ATTEMPTS {
             FailOutcome::GaveUp
@@ -367,7 +387,7 @@ impl Store {
             return Err(StoreError::Invalid("thumbnail size"));
         }
         let n = self.conn.execute(
-            "UPDATE mms_parts SET thumb = ?2 WHERE part_id = ?1 AND kind = 'image'",
+            "UPDATE mms_parts SET thumb = ?2, display_ok = 1 WHERE part_id = ?1 AND kind = 'image'",
             params![part_id, thumb],
         )?;
         Ok(n > 0)
@@ -400,29 +420,31 @@ impl Store {
         Ok(out)
     }
 
-    /// Bytes of an image attachment (`thumb`: the downscaled copy, falling
-    /// back to the original when none exists). Only `image` parts with an
-    /// allow-listed type are ever returned.
+    /// Bytes of an image attachment (`thumb`: the downscaled copy). Only
+    /// `image` parts with an allow-listed type whose dimensions the platform
+    /// thumbnailer validated (`display_ok`) are ever returned (R5 #7): an
+    /// oversized raster never reaches the WebView, and the original is never
+    /// a fallback for a missing thumbnail.
     pub fn mms_image(&self, part_id: i64, thumb: bool) -> Result<Option<(String, Vec<u8>)>> {
         let row: Option<PartRow> = self
             .conn
             .prepare_cached(
-                "SELECT kind, content_type, data, thumb FROM mms_parts WHERE part_id = ?1",
+                "SELECT kind, content_type, data, thumb, display_ok FROM mms_parts WHERE part_id = ?1",
             )?
             .query_row([part_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })
             .optional()?;
-        let Some((kind, ct, data, th)) = row else {
+        let Some((kind, ct, data, th, display_ok)) = row else {
             return Ok(None);
         };
-        if kind != "image" || !IMAGE_TYPES.contains(&ct.as_str()) {
+        if kind != "image" || !IMAGE_TYPES.contains(&ct.as_str()) || !display_ok {
             return Ok(None);
         }
         Ok(match (thumb, th, data) {
             // Thumbnails are JPEG (made by the platform).
             (true, Some(t), _) => Some(("image/jpeg".to_string(), t)),
-            (_, _, Some(d)) => Some((ct, d)),
+            (false, _, Some(d)) => Some((ct, d)),
             _ => None,
         })
     }

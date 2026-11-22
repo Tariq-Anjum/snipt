@@ -165,7 +165,7 @@ impl Core {
 
     /// Count a download attempt; fails for a transaction that is not pending.
     pub fn mms_attempt(&mut self, pending_id: i64) -> CmdResult<i64> {
-        Ok(self.store.mms_attempt(pending_id)?)
+        Ok(self.store.mms_attempt(pending_id, now_ms())?)
     }
 
     /// Pending downloads worth retrying now.

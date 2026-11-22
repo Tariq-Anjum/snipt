@@ -220,6 +220,7 @@ pub enum ClassificationReason {
     OtpOrReminder,
     DltPromoSuffix,
     MlLinear,
+    ServiceRule,
     ThreadConsensus,
     EmptyThread,
 }

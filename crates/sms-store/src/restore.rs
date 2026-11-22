@@ -136,9 +136,17 @@ impl Store {
         // ---- presence: multiset match against pre-existing rows ----------
         // Nothing is inserted in this phase, so only rows that existed
         // before the restore can match.
+        // Two passes (R5 #2): exact identity matches (same id) are reserved
+        // across the whole archive first, so a self-restore never maps a row
+        // onto its byte-identical twin; the remaining duplicates then prefer
+        // a candidate in the same thread. A pick among several equal
+        // candidates with no identity or thread affinity is ambiguous: it
+        // counts as present but carries no per-message flag.
         let mut consumed: HashSet<i64> = HashSet::new();
         let mut msg_map: HashMap<i64, i64> = HashMap::new();
+        let mut ambiguous: HashSet<i64> = HashSet::new();
         let mut matched_threads: HashMap<i64, BTreeSet<i64>> = HashMap::new();
+        let mut cands_of: Vec<Vec<(i64, i64)>> = Vec::with_capacity(input.messages.len());
         for m in input.messages {
             let cands: Vec<(i64, i64)> = tx
                 .prepare_cached(
@@ -159,7 +167,35 @@ impl Store {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )?
                 .collect::<rusqlite::Result<_>>()?;
-            if let Some((id, t)) = cands.into_iter().find(|(id, _)| !consumed.contains(id)) {
+            cands_of.push(cands);
+        }
+        for (m, cands) in input.messages.iter().zip(&cands_of) {
+            if let Some(&(id, t)) = cands.iter().find(|(id, _)| *id == m.id)
+                && consumed.insert(id)
+            {
+                msg_map.insert(m.id, id);
+                matched_threads.entry(m.thread_id).or_default().insert(t);
+                out.ingest.skipped_existing += 1;
+            }
+        }
+        for (m, cands) in input.messages.iter().zip(&cands_of) {
+            if msg_map.contains_key(&m.id) {
+                continue;
+            }
+            let free: Vec<(i64, i64)> = cands
+                .iter()
+                .copied()
+                .filter(|(id, _)| !consumed.contains(id))
+                .collect();
+            let pick = free
+                .iter()
+                .find(|(_, t)| *t == m.thread_id)
+                .or_else(|| free.first())
+                .copied();
+            if let Some((id, t)) = pick {
+                if free.len() > 1 && t != m.thread_id {
+                    ambiguous.insert(m.id);
+                }
                 consumed.insert(id);
                 msg_map.insert(m.id, id);
                 matched_threads.entry(m.thread_id).or_default().insert(t);
@@ -295,6 +331,9 @@ impl Store {
             out.blocked_senders += 1;
         }
         for r in input.completed_reminder_ids {
+            if ambiguous.contains(r) {
+                continue;
+            }
             if let Some(mapped) = msg_map.get(r) {
                 tx.prepare_cached("INSERT OR IGNORE INTO reminders_done(msg_id) VALUES (?1)")?
                     .execute([mapped])?;

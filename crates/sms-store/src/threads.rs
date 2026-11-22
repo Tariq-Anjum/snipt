@@ -247,6 +247,12 @@ pub(crate) fn recompute_thread(conn: &Connection, thread_id: i64) -> Result<()> 
         .collect::<Result<_>>()?;
     if recent.is_empty() {
         conn.execute("DELETE FROM threads WHERE thread_id = ?1", [thread_id])?;
+        // An empty thread keeps no archive flag (R5 #1: an orphan flag was
+        // inherited by, or collided with, a later thread with that id).
+        conn.execute(
+            "DELETE FROM archived_threads WHERE thread_id = ?1",
+            [thread_id],
+        )?;
         return Ok(());
     }
     recent.reverse();

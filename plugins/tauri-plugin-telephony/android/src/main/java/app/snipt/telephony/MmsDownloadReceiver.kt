@@ -20,6 +20,7 @@ class MmsDownloadReceiver : BroadcastReceiver() {
         val kind = data.host
         val code = resultCode
         val pending = goAsync()
+        BackgroundWork.begin()
         val ctx = context.applicationContext
         Thread {
             try {
@@ -36,6 +37,7 @@ class MmsDownloadReceiver : BroadcastReceiver() {
             } catch (t: Throwable) {
                 Log.w(TAG, "MMS result failed: ${t.javaClass.simpleName}")
             } finally {
+                BackgroundWork.end()
                 pending.finish()
             }
         }.start()

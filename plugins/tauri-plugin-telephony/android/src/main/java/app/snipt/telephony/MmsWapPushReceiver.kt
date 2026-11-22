@@ -22,6 +22,7 @@ class MmsWapPushReceiver : BroadcastReceiver() {
         val data = intent.getByteArrayExtra("data") ?: return
         val subId = subIdOf(intent)
         val pending = goAsync()
+        BackgroundWork.begin()
         val ctx = context.applicationContext
         Thread {
             try {
@@ -30,6 +31,7 @@ class MmsWapPushReceiver : BroadcastReceiver() {
             } catch (t: Throwable) {
                 Log.w(TAG, "wap push failed: ${t.javaClass.simpleName}")
             } finally {
+                BackgroundWork.end()
                 pending.finish()
             }
         }.start()
@@ -69,7 +71,9 @@ class MmsWapPushReceiver : BroadcastReceiver() {
                 return pid
             }
             Log.i(TAG, "MMS notification recorded; download=${download}")
-            if (download) MmsDownloader.start(ctx, pid, out.getString("location"), subId)
+            // Download on the subscription recorded with the claimed row (R5 #6).
+            val dlSub = if (out.has("subId") && !out.isNull("subId")) out.getInt("subId") else subId
+            if (download) MmsDownloader.start(ctx, pid, out.getString("location"), dlSub)
             return pid
         }
     }

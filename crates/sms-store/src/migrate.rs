@@ -21,6 +21,9 @@ const MIGRATIONS: &[Step] = &[
     Step::SqlThen("SELECT 1;", repair_v5),
     // v6: own-account transfers (InfoBIL*INFT*) are not spending; re-analyse.
     Step::SqlThen("SELECT 1;", repair_v5),
+    // v7: MMS identity/in-flight/display eligibility (R5 #5-#7) and the
+    // service-notice classification rules: re-analyse once more.
+    Step::SqlThen(schema::SCHEMA_V7, repair_v5),
 ];
 
 fn repair_v5(tx: &Transaction<'_>) -> Result<(), StoreError> {

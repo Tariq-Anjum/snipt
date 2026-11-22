@@ -40,12 +40,13 @@ fn v5_reanalyses_rows_stored_by_older_rules() {
         let mut s = Store::open(&path, TZ).unwrap();
         s.ingest_batch(&[raw(1, 1, NOW - DAY, "BP-ICICIT-S", USD_SPEND)])
             .unwrap();
-        // Simulate a v4 database written by the old rules: ₹95,221 debit.
+        // Simulate a v6 database written by older finance rules: ₹95,221 debit.
         let c = s.connection();
         c.execute_batch(
             r#"UPDATE messages SET txn_json = '{"amount":95221.0,"currency":"INR","direction":"Debit","paymentMethod":"Credit Card","accountLast4":"1111","merchantOrVpa":null,"referenceId":null,"availableBalance":null,"isUpi":false}' WHERE id = 1;
                UPDATE transactions SET amount = 95221.0 WHERE msg_id = 1;
-               PRAGMA user_version = 4;"#,
+               ALTER TABLE mms_parts DROP COLUMN display_ok;
+               PRAGMA user_version = 6;"#,
         )
         .unwrap();
     }
@@ -193,4 +194,72 @@ fn duplicate_alerts_count_once() {
     assert!(ids.contains(&5) && ids.contains(&6), "{ids:?}");
     assert!(ids.contains(&7) && ids.contains(&8), "{ids:?}");
     assert_eq!(f.total_debits, 250.0 + 999.0 + 70.0 * 2.0 + 500.0 * 2.0);
+}
+
+#[test]
+fn replay_never_resurrects_a_locally_deleted_row() {
+    // R5 #4: receiver wrote provider row 77 and ingested it; reconcile saw
+    // it "missing" before that; the user deleted it locally (tombstone);
+    // the replay arrives last and must not insert it again.
+    let mut s = Store::open_in_memory(TZ).unwrap();
+    let input = sms_store::IncomingSms {
+        sender: "+919800000001".into(),
+        body: "hello".into(),
+        timestamp_ms: Some(NOW - 1000),
+        sim_slot: 0,
+        is_known_contact: false,
+        contact_name: None,
+        protocol: None,
+    };
+    let (raw, inserted) = s.ingest_from_provider(&input, Some(77), NOW).unwrap();
+    assert!(inserted);
+    s.delete_messages(&[raw.id]).unwrap();
+    assert_eq!(s.ingest_replayed(&input, 77, NOW).unwrap(), None);
+    assert_eq!(s.message_count().unwrap(), 0);
+    // An unrelated provider row still replays.
+    let r = s.ingest_replayed(&input, 78, NOW).unwrap().unwrap();
+    assert!(r.1);
+}
+
+#[test]
+fn self_restore_keeps_flags_on_the_same_rows() {
+    // R5 #2: two byte-identical rows inserted in reverse id order; restoring
+    // the store's own archive must not swap their archive/reminder flags.
+    use sms_store::RestoreInput;
+    let mut s = Store::open_in_memory(TZ).unwrap();
+    let body = "Electricity bill of Rs 500 due on 30-Nov-26";
+    let a = raw(5, 50, NOW - DAY, "VM-BSESRP-S", body);
+    let b = raw(3, 30, NOW - DAY, "VM-BSESRP-S", body);
+    s.ingest_batch(&[a.clone(), b.clone()]).unwrap();
+    let c = s.connection();
+    c.execute("INSERT INTO archived_threads(thread_id) VALUES (50)", [])
+        .unwrap();
+    c.execute("INSERT INTO reminders_done(msg_id) VALUES (5)", [])
+        .unwrap();
+    s.restore_merge(&RestoreInput {
+        messages: &[a, b],
+        archived_thread_ids: &[50],
+        blocked_senders: &[],
+        completed_reminder_ids: &[5],
+        settings: &[],
+    })
+    .unwrap();
+    let c = s.connection();
+    let archived: Vec<i64> = c
+        .prepare("SELECT thread_id FROM archived_threads ORDER BY thread_id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let done: Vec<i64> = c
+        .prepare("SELECT msg_id FROM reminders_done ORDER BY msg_id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(archived, vec![50]);
+    assert_eq!(done, vec![5]);
+    assert_eq!(s.message_count().unwrap(), 2);
 }

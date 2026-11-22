@@ -87,12 +87,14 @@ function Viewer({ att, onClose }: { att: AttachmentMeta; onClose: () => void }) 
 
 function ImageThumb({ att }: { att: AttachmentMeta }) {
   const [open, setOpen] = useState(false);
-  const { url, failed } = useImageUrl(att.id, true);
+  // Only images the platform thumbnailer validated are served (R5 #7); the
+  // thread refreshes (sms-changed) when a thumbnail arrives.
+  const { url, failed } = useImageUrl(att.id, true, att.hasThumb);
   return (
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => att.hasThumb && setOpen(true)}
         aria-label={`View image ${att.name ?? ''}`.trim()}
         className="block overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800"
       >
@@ -100,9 +102,10 @@ function ImageThumb({ att }: { att: AttachmentMeta }) {
           <img src={url} alt={att.name ?? 'Image attachment'} className="block max-h-64 max-w-full object-cover" />
         ) : (
           <span className="flex h-32 w-48 items-center justify-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-            {failed ? (
+            {failed || !att.hasThumb ? (
               <>
-                <ImageOff className="w-4 h-4" aria-hidden="true" /> Image unavailable
+                <ImageOff className="w-4 h-4" aria-hidden="true" />{' '}
+                {att.hasThumb ? 'Image unavailable' : 'Image not shown (too large or still processing)'}
               </>
             ) : (
               'Loading image...'

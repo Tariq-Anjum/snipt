@@ -39,3 +39,19 @@ Connected via wireless adb, later USB.
 - Exit abort (FORTIFY destroyed mutex) fixed: MainActivity ends the process on a finishing destroy; verified no abort on exit.
 - Checks: cargo fmt/clippy -D warnings clean; cargo test 152/152; TS tests 14/14; tsc clean.
 - Open: classification of some service SMS (a retailer loyalty-points notice -> Transactions, a lab-report notice -> Promotions) is the ML model; not changed.
+
+## R5 correction round (owner-authorized 4th round, 2026-11-22)
+Policy: local-policy/AGENT_CORRECTION_RETRY_RESEARCH.md; owner explicitly authorized the 4th correction. Each blocker has a regression test; #1 and #2 were confirmed to fail on the previous code.
+| R5 | Fix | Test |
+|---|---|---|
+| 1 v4 orphan refs | repair_for_v4 drops orphan archive flags / reminder flags / mms_pending links before remapping; an emptied thread clears its archive flag | ids::r5_tests::v4_repair_ignores_orphan_archive_flags (old code: UNIQUE archived_threads.thread_id) |
+| 2 self-restore flag swap | two-pass matching: exact id reserved first, then thread affinity; ambiguous picks carry no reminder flag | phone_round1::self_restore_keeps_flags_on_the_same_rows (old code: archived [30,50]) |
+| 3 delete vs live send; double init | delete reserves ids in the core before any provider write (busy hand-offs refused; reserved ids cannot begin a send); AppState::shared opens+recovers under one init lock | commands::delete_reservation_blocks_send_start_and_busy_sends_block_delete |
+| 4 replay resurrection | batch replay/import uses Store::ingest_replayed: tombstone checked in the insert transaction | phone_round1::replay_never_resurrects_a_locally_deleted_row |
+| 5 MMS maintenance vs in-flight | mms_pending.inflight_ms set per attempt; exhausted/retryable skip in-flight attempts until fail or 10 min timeout | mms::r5_inflight_attempt_is_not_finalized_and_ids_are_scoped_per_subscription |
+| 6 MMS tx id global | unique per (transaction id, location, subscription); done/failed records pruned after 30 days; download uses the claimed row's subscription | same test |
+| 7 WebView pixel cap | mms_parts.display_ok set only by the native thumbnailer; mms_image serves nothing before that and never falls back to the original | mms store + core tests updated |
+Residual (not fixed): MMS callback writes the provider row before core ingest (Kotlin); a crash between them leaves a provider-only MMS until the next import. R5 optionals (capabilities retry, MMS cache cleanup, truncated-parts flag) not done.
+
+Other: post-ML service rules (report ready / pickup / appointment -> Priority; loyalty points -> Promotions; never overrides Spam) in TS + Rust; process kill on exit skipped while a receiver is saving (BackgroundWork). Schema v7 = MMS changes + one more re-analysis.
+Checks: cargo fmt + clippy -D warnings clean; cargo test 157/157; TS 14/14; tsc clean.

@@ -172,6 +172,27 @@ pub async fn delete_messages<R: Runtime>(
     state: State<'_, AppState>,
     ids: Vec<i64>,
 ) -> CmdResult<DeleteOutcome> {
+    // Reserve first (R5 #3): a message mid-send is refused before its
+    // provider row is touched, and a reserved one cannot start a send.
+    let (ids, busy) = state.run(move |c| c.reserve_delete(&ids)).await?;
+    let reserved = ids.clone();
+    let out = delete_reserved(&app, &state, ids).await;
+    let _ = state
+        .run(move |c| {
+            c.release_delete(&reserved);
+            Ok(())
+        })
+        .await;
+    let mut out = out?;
+    out.failed_ids.extend(busy);
+    Ok(out)
+}
+
+async fn delete_reserved<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, AppState>,
+    ids: Vec<i64>,
+) -> CmdResult<DeleteOutcome> {
     let lookup = ids.clone();
     let (sms, mms) = state
         .run(move |c| Ok((c.provider_refs(&lookup)?, c.mms_refs(&lookup)?)))
@@ -181,7 +202,7 @@ pub async fn delete_messages<R: Runtime>(
         // SMS and MMS provider ids are separate namespaces: one call each.
         for (refs, is_mms) in [(sms, false), (mms, true)] {
             let ok = provider_ok(
-                &app,
+                app,
                 refs.iter().map(|r| r.provider_id).collect(),
                 is_mms,
                 true,

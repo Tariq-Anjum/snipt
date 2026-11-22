@@ -22,6 +22,7 @@ class SmsStatusReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val code = resultCode
         val pending = goAsync()
+        BackgroundWork.begin()
         val ctx = context.applicationContext
         Thread {
             try {
@@ -29,6 +30,7 @@ class SmsStatusReceiver : BroadcastReceiver() {
             } catch (t: Throwable) {
                 android.util.Log.w("SniptSend", "status failed: ${t.javaClass.simpleName}")
             } finally {
+                BackgroundWork.end()
                 pending.finish()
             }
         }.start()

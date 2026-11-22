@@ -49,6 +49,9 @@ pub struct Core {
     /// uses an ephemeral per-session key by design and is ready at once.
     vault_ready: bool,
     caps: Capabilities,
+    /// Messages whose deletion is in progress (provider row first, then the
+    /// store). A send cannot start on them meanwhile (R5 #3).
+    deleting: std::collections::HashSet<i64>,
 }
 
 /// Shared handle stored in Tauri state.
@@ -72,6 +75,17 @@ impl AppState {
     /// (the path of later calls is ignored, both sides pass the same file).
     pub fn shared(db_path: impl AsRef<Path>) -> Result<Self, CmdError> {
         static SHARED: OnceLock<AppState> = OnceLock::new();
+        // Opening and recovery are one serialized step (R5 #3): Tauri and a
+        // JNI receiver can race here; without the lock the second opener
+        // ran recovery after the first had started a live send, closing
+        // its hand-off guard.
+        static INIT: Mutex<()> = Mutex::new(());
+        if let Some(s) = SHARED.get() {
+            return Ok(s.clone());
+        }
+        let _init = INIT
+            .lock()
+            .map_err(|_| CmdError("internal state poisoned".into()))?;
         if let Some(s) = SHARED.get() {
             return Ok(s.clone());
         }
@@ -369,6 +383,7 @@ impl Core {
             vault: OtpVault::new_random(),
             vault_ready: caps.platform != "android",
             caps,
+            deleting: std::collections::HashSet::new(),
         }
     }
 
@@ -664,6 +679,31 @@ impl Core {
         self.incoming_result(raw.id, raw.thread_id, inserted)
     }
 
+    /// Replay / first-run import of a provider row: refused (None) when the
+    /// row was deleted locally (tombstone), checked in the insert transaction.
+    pub fn ingest_replayed(
+        &mut self,
+        input: &IncomingSms,
+        provider_id: i64,
+    ) -> CmdResult<Option<IncomingResult>> {
+        if input.sender.trim().is_empty() {
+            return Err(CmdError::invalid("sender"));
+        }
+        check_text(&input.sender, MAX_SENDER_CHARS, "sender")?;
+        check_text(&input.body, MAX_BODY_CHARS, "body")?;
+        if let Some(c) = &input.contact_name {
+            check_text(c, MAX_SENDER_CHARS, "contactName")?;
+        }
+        match self.store.ingest_replayed(input, provider_id, now_ms())? {
+            None => Ok(None),
+            Some((raw, inserted)) => Ok(Some(self.incoming_result(
+                raw.id,
+                raw.thread_id,
+                inserted,
+            )?)),
+        }
+    }
+
     /// Notification payload + thread for a stored incoming message (SMS or
     /// MMS): OTP masked in the body, code only in the vault payload.
     pub(crate) fn incoming_result(
@@ -757,7 +797,27 @@ impl Core {
     }
 
     pub fn begin_send_attempt(&mut self, sms_id: i64, parts: u32) -> CmdResult<i64> {
+        if self.deleting.contains(&sms_id) {
+            return Err(CmdError::invalid("message is being deleted"));
+        }
         Ok(self.store.begin_send_attempt(sms_id, parts, now_ms())?)
+    }
+
+    /// Reserve `ids` for deletion before any provider row is touched (R5 #3):
+    /// ids with an open send hand-off are returned as busy and not reserved;
+    /// reserved ids cannot start a send until [`Core::release_delete`].
+    pub fn reserve_delete(&mut self, ids: &[i64]) -> CmdResult<(Vec<i64>, Vec<i64>)> {
+        check_ids(ids)?;
+        let busy = self.store.handoff_open(ids)?;
+        let reserved: Vec<i64> = ids.iter().copied().filter(|i| !busy.contains(i)).collect();
+        self.deleting.extend(reserved.iter().copied());
+        Ok((reserved, busy))
+    }
+
+    pub fn release_delete(&mut self, ids: &[i64]) {
+        for i in ids {
+            self.deleting.remove(i);
+        }
     }
 
     /// Close a send hand-off (see [`Store::end_send_handoff`]).

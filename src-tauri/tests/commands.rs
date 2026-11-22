@@ -687,3 +687,33 @@ fn restore_with_colliding_ids_keeps_both_histories() {
         (0, 1)
     );
 }
+
+#[test]
+fn delete_reservation_blocks_send_start_and_busy_sends_block_delete() {
+    // R5 #3: provider-first delete must not race a live send hand-off.
+    let mut phone = seeded_phone();
+    let t = phone
+        .threads_page("All", None, None, Some(1))
+        .unwrap()
+        .threads[0]
+        .thread_id;
+    let out = |body: &str| OutgoingSms {
+        thread_id: Some(t),
+        address: None,
+        body: body.into(),
+        sim_slot: 0,
+        reply_to: None,
+    };
+    // A reserved message cannot start a send.
+    let a = phone.queue_outgoing(&out("first")).unwrap().message.sms.id;
+    let (reserved, busy) = phone.reserve_delete(&[a]).unwrap();
+    assert_eq!((reserved, busy), (vec![a], vec![]));
+    assert!(phone.begin_send_attempt(a, 1).is_err());
+    phone.release_delete(&[a]);
+    // A message mid-send is reported busy and not reserved.
+    let b = phone.queue_outgoing(&out("second")).unwrap().message.sms.id;
+    phone.begin_send_attempt(b, 1).unwrap();
+    let (reserved, busy) = phone.reserve_delete(&[b]).unwrap();
+    assert_eq!((reserved, busy), (vec![], vec![b]));
+    assert!(phone.begin_send_attempt(a, 1).is_ok());
+}

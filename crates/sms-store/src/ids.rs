@@ -104,6 +104,18 @@ pub(crate) fn keepable(id: i64, next0: Option<i64>) -> bool {
 pub(crate) fn repair_for_v4(tx: &Transaction<'_>, kind: IdKind) -> Result<usize> {
     let col = kind.col();
     let cap = MAX_EXTERNAL_ID;
+    // Reference-only ids (R5 #1): a flag or link whose message/thread is
+    // gone would collide with, or be inherited by, a renumbered survivor.
+    match kind {
+        IdKind::Thread => tx.execute_batch(
+            "DELETE FROM archived_threads WHERE thread_id NOT IN (SELECT thread_id FROM messages);",
+        )?,
+        IdKind::Message => tx.execute_batch(
+            "DELETE FROM reminders_done WHERE msg_id NOT IN (SELECT id FROM messages);
+             UPDATE mms_pending SET msg_id = NULL
+               WHERE msg_id IS NOT NULL AND msg_id NOT IN (SELECT id FROM messages);",
+        )?,
+    }
     let stored = stored_next(tx, kind)?;
     let max_ok: Option<i64> = tx.query_row(
         &format!(
@@ -204,4 +216,46 @@ pub(crate) fn note_used(tx: &Transaction<'_>, kind: IdKind, id: i64) -> Result<(
     )?
     .execute(rusqlite::params![kind.name(), id + 1])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod r5_tests {
+    use super::*;
+
+    #[test]
+    fn v4_repair_ignores_orphan_archive_flags() {
+        // R5 #1: thread 2^40+1 was archived and emptied (orphan flag);
+        // renumbering survivor 2^40+2 to the clamped mark 2^40+1 used to
+        // fail with UNIQUE(archived_threads.thread_id) and roll back v4.
+        let mut s = crate::Store::open_in_memory(330).unwrap();
+        let big = MAX_EXTERNAL_ID;
+        let tx = crate::write_tx(&mut s.conn).unwrap();
+        tx.execute_batch(&format!(
+            "INSERT INTO messages (id, ins_seq, thread_id, sender, sender_lc, body, ts_ms,
+                is_known_contact, is_outgoing, sim_slot, category, confidence, reason,
+                scores_json, sender_kind_json)
+             VALUES (10, 1, {t2}, 'A', 'a', 'hi', 1700000000000, 0, 0, 0, 'Personal', 0.9,
+                'MlLinear', '[0.9,0.025,0.025,0.025,0.025]', '{{\"type\":\"PhoneNumber\"}}');
+             INSERT INTO archived_threads(thread_id) VALUES ({t1}), ({t2});
+             INSERT INTO id_alloc(name, next) VALUES ('thread', {t2} + 1)
+               ON CONFLICT(name) DO UPDATE SET next = excluded.next;",
+            t1 = big + 1,
+            t2 = big + 2
+        ))
+        .unwrap();
+        repair_for_v4(&tx, IdKind::Thread).unwrap();
+        let archived: Vec<i64> = tx
+            .prepare("SELECT thread_id FROM archived_threads")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let t: i64 = tx
+            .query_row("SELECT thread_id FROM messages WHERE id = 10", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(archived, vec![t], "survivor keeps its own flag only");
+    }
 }

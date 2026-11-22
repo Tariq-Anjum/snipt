@@ -100,6 +100,7 @@ export type ClassificationReason =
   | 'otp_or_reminder'
   | 'dlt_promo_suffix'
   | 'ml_linear'
+  | 'service_rule'
   | 'thread_consensus'
   | 'empty_thread';
 

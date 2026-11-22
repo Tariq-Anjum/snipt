@@ -26,6 +26,7 @@ import org.json.JSONObject
 class NotificationActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val pending = goAsync()
+        BackgroundWork.begin()
         val ctx = context.applicationContext
         // RemoteInput results must be read from the delivered intent.
         val reply = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Notifier.KEY_REPLY)?.toString()
@@ -35,6 +36,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
             } catch (t: Throwable) {
                 Log.w(TAG, "action failed: ${t.javaClass.simpleName}")
             } finally {
+                BackgroundWork.end()
                 pending.finish()
             }
         }.start()

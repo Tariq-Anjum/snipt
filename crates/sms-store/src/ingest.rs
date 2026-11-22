@@ -205,6 +205,38 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Replay / import of an existing provider row (R5 #4): the tombstone
+    /// check runs inside the same write transaction as the insert, so a row
+    /// deleted locally between the reconcile query and this call is never
+    /// resurrected. Returns `None` for a tombstoned provider id. Live
+    /// receipts use [`Store::ingest_from_provider`] (a fresh provider row
+    /// whose id the provider may have reused is never refused there).
+    pub fn ingest_replayed(
+        &mut self,
+        input: &IncomingSms,
+        provider_id: i64,
+        now_ms: i64,
+    ) -> Result<Option<(RawSms, bool)>> {
+        let tx = crate::write_tx(&mut self.conn)?;
+        let tombstoned = tx
+            .prepare_cached("SELECT 1 FROM provider_tombstones WHERE provider_id = ?1")?
+            .exists([provider_id])?;
+        if tombstoned {
+            return Ok(None);
+        }
+        let r = ingest_in_tx(
+            &tx,
+            &self.engine,
+            input,
+            ProviderLink::Sms(provider_id),
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(Some(r))
+    }
+}
+
 /// Which Telephony provider row (if any) a received message mirrors. SMS and
 /// MMS provider ids are separate namespaces (`content://sms` vs
 /// `content://mms` `_id`), stored in separate columns (`provider_id`,

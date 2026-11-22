@@ -69,13 +69,10 @@ fn notification_to_ingest_end_to_end() {
     assert_eq!(json["attachments"][0]["contentType"], "image/png");
     assert!(json["attachments"][0].get("data").is_none());
 
-    // Image read: full size until a thumbnail exists, then the JPEG thumbnail.
-    let img = c.mms_image(t.part_id, true).unwrap();
-    assert_eq!(img.content_type, "image/png");
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(img.data_b64)
-        .unwrap();
-    assert_eq!(bytes, png);
+    // Image read (R5 #7): nothing until the platform thumbnailer validated
+    // the image; then the JPEG thumbnail and the original.
+    assert!(c.mms_image(t.part_id, true).is_err());
+    assert!(c.mms_image(t.part_id, false).is_err());
     assert!(
         c.mms_set_thumb(t.part_id, &png).is_err(),
         "thumb must be JPEG"
@@ -88,10 +85,12 @@ fn notification_to_ingest_end_to_end() {
         c.mms_image(t.part_id, true).unwrap().content_type,
         "image/jpeg"
     );
-    assert_eq!(
-        c.mms_image(t.part_id, false).unwrap().content_type,
-        "image/png"
-    );
+    let img = c.mms_image(t.part_id, false).unwrap();
+    assert_eq!(img.content_type, "image/png");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(img.data_b64)
+        .unwrap();
+    assert_eq!(bytes, png);
     assert!(c.mms_image(9999, false).is_err());
 
     // Provider namespaces and notification action target.

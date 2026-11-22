@@ -18,6 +18,7 @@ class SmsDeliverReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_DELIVER_ACTION) return
         val pending = goAsync()
+        BackgroundWork.begin()
         val ctx = context.applicationContext
         Thread {
             try {
@@ -25,6 +26,7 @@ class SmsDeliverReceiver : BroadcastReceiver() {
             } catch (t: Throwable) {
                 Log.w(TAG, "deliver failed: ${t.javaClass.simpleName}")
             } finally {
+                BackgroundWork.end()
                 pending.finish()
             }
         }.start()

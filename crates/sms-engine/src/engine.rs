@@ -6,7 +6,20 @@ use sms_types::{
     ExtractedReminder, ExtractedTransaction, ParsedSms, RawSms, SenderKind,
 };
 
+use crate::jsre::js_regex;
 use crate::{dlt, finance, ml::LinearClassifier, otp, reminder, thread};
+
+// Phone round 1 (mirrors index.ts): post-ML corrections, never to Spam.
+js_regex!(
+    service_notice_re,
+    r"\b(?:(?:report|results?)\s+(?:is|are)\s+(?:now\s+)?ready|ready\s+for\s+(?:pickup|collection)|appointment\s+(?:is\s+)?(?:confirmed|scheduled|booked))\b",
+    i
+);
+js_regex!(
+    loyalty_re,
+    r"\bpoints?\b[^\n]{0,80}\b(?:redeem|redemption|adjusted|expir|earned|balance)",
+    i
+);
 
 /// Result of analysing one message (ParsedSms without the echoed `sms`).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -93,11 +106,30 @@ impl SmsEngine {
         } else {
             let scores = self.classifier.predict_proba(sms, &sender_kind);
             let (best_idx, best) = thread::argmax(&scores);
-            Classification {
-                category: CATEGORY_LIST[best_idx],
-                confidence: best,
-                scores,
-                reason: ClassificationReason::MlLinear,
+            let ml = CATEGORY_LIST[best_idx];
+            if matches!(ml, Category::Promotions | Category::Transactions)
+                && service_notice_re().is_match(&sms.body)
+            {
+                fixed(
+                    Category::Priority,
+                    0.95,
+                    [0.01, 0.01, 0.01, 0.95, 0.02],
+                    ClassificationReason::ServiceRule,
+                )
+            } else if ml == Category::Transactions && loyalty_re().is_match(&sms.body) {
+                fixed(
+                    Category::Promotions,
+                    0.95,
+                    [0.01, 0.02, 0.95, 0.01, 0.01],
+                    ClassificationReason::ServiceRule,
+                )
+            } else {
+                Classification {
+                    category: CATEGORY_LIST[best_idx],
+                    confidence: best,
+                    scores,
+                    reason: ClassificationReason::MlLinear,
+                }
             }
         };
 

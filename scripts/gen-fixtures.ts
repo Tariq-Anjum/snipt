@@ -204,6 +204,8 @@ const hazardInputs: RawSms[] = [
   makeSms('AX-HDFCBK-S', 'EMI of Rs 5,000 debited from A/c XX4444. Next EMI is due on 5-Dec'),
   makeSms('AX-HDFCBK-S', 'Payment of Rs 12,000 received towards your Credit Card XX5555. Thank you'),
   makeSms('BP-ICICIT-S', 'ICICI Bank Acc XX333 debited Rs. 20,086.06 on 04-Nov-26 InfoBIL*INFT*FK47.Avl Bal Rs. 36,303.68.To dispute call 18002662'),
+  makeSms('VM-RETAIL-S', 'Dear Customer, from 1 Dec 2026, 1 point = Rs 1. Your existing points will be adjusted accordingly, while their total redemption value stays'),
+  makeSms('VM-LABXYZ-S', 'Dear Customer, Lab No 559000, your report is ready. You can collect from counter / download from https://example.org/'),
   makeSms('BP-ICICIT-S', 'MICROSOFT INDIA refund of Rs 2.00 credited to ICICI Bank Credit Card XX1111 on 29-OCT-26. Revised total due Rs 20,086.06, minimum due Rs 12,348.55'),
 ];
 const analyzeInputs = [...seed, ...bulkOnly.slice(0, 2000), ...hazardInputs.map(canon)];

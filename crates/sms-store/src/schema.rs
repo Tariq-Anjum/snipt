@@ -210,3 +210,38 @@ pub(crate) fn repair_v4(tx: &rusqlite::Transaction<'_>) -> Result<(), crate::Sto
     crate::ids::repair_for_v4(tx, crate::ids::IdKind::Thread)?;
     Ok(())
 }
+
+/// Schema v7 (R5 #5-#7):
+/// - `mms_pending` deduplicates per (transaction id, content location,
+///   subscription): OMA scopes the transaction id to one notification
+///   exchange, so two SIMs (or a reused id) are separate downloads.
+/// - `mms_pending.inflight_ms`: when the running download attempt started;
+///   maintenance never finalizes an attempt that is still in flight.
+/// - `mms_parts.display_ok`: set when the platform thumbnailer validated the
+///   image (dimension cap); only such images are ever served to the UI.
+pub const SCHEMA_V7: &str = r#"
+CREATE TABLE mms_pending_v7 (
+    pending_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id TEXT NOT NULL,
+    location TEXT NOT NULL,
+    sender TEXT,
+    sub_id INTEGER,
+    sim_slot INTEGER NOT NULL,
+    received_ms INTEGER NOT NULL,
+    expiry_ms INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'done', 'failed')),
+    msg_id INTEGER,
+    inflight_ms INTEGER
+);
+INSERT INTO mms_pending_v7 (pending_id, transaction_id, location, sender, sub_id, sim_slot,
+    received_ms, expiry_ms, attempts, state, msg_id)
+    SELECT pending_id, transaction_id, location, sender, sub_id, sim_slot,
+        received_ms, expiry_ms, attempts, state, msg_id FROM mms_pending;
+DROP TABLE mms_pending;
+ALTER TABLE mms_pending_v7 RENAME TO mms_pending;
+CREATE UNIQUE INDEX idx_mms_pending_identity
+    ON mms_pending(transaction_id, location, COALESCE(sub_id, -1));
+ALTER TABLE mms_parts ADD COLUMN display_ok INTEGER NOT NULL DEFAULT 0;
+UPDATE mms_parts SET display_ok = 1 WHERE thumb IS NOT NULL;
+"#;

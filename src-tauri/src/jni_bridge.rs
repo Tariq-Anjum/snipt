@@ -162,6 +162,26 @@ fn ingest_one(input: &IngestIn) -> CmdResult<IngestOut> {
     Ok(ingest_out(r))
 }
 
+/// Batch path (first-run import, reconcile replay): provider rows that
+/// already exist, so a local tombstone wins (R5 #4). Items without a
+/// provider id fall back to the plain ingest.
+fn ingest_replayed(input: &IngestIn) -> CmdResult<Option<IngestOut>> {
+    let Some(pid) = input.provider_id else {
+        return ingest_one(input).map(Some);
+    };
+    let r = state()?.with_core(|c| {
+        let r = c.ingest_replayed(&input.message, pid)?;
+        if let Some(r) = &r
+            && r.inserted
+            && input.read
+        {
+            c.mark_read(r.notification.message.sms.id)?;
+        }
+        Ok(r)
+    })?;
+    Ok(r.map(ingest_out))
+}
+
 fn ingest_out(r: crate::core::IncomingResult) -> IngestOut {
     let n = r.notification;
     IngestOut {
@@ -264,8 +284,8 @@ pub extern "system" fn Java_app_snipt_telephony_NativeCore_ingestBatch<'l>(
             failed: 0,
         };
         for it in &items {
-            match ingest_one(it) {
-                Ok(o) if o.inserted => out.inserted += 1,
+            match ingest_replayed(it) {
+                Ok(Some(o)) if o.inserted => out.inserted += 1,
                 Ok(_) => out.skipped += 1,
                 Err(_) => out.failed += 1,
             }

@@ -11,6 +11,14 @@ import {
   type RawSms,
 } from './types';
 
+// Phone round 1: corrections applied after the ML stage (never to Spam).
+// A service notice (lab report ready, ready for pickup, appointment
+// confirmed) is Priority; a loyalty-points notice with no transaction is
+// Promotions.
+const SERVICE_NOTICE_RE =
+  /\b(?:(?:report|results?)\s+(?:is|are)\s+(?:now\s+)?ready|ready\s+for\s+(?:pickup|collection)|appointment\s+(?:is\s+)?(?:confirmed|scheduled|booked))\b/i;
+const LOYALTY_RE = /\bpoints?\b[^\n]{0,80}\b(?:redeem|redemption|adjusted|expir|earned|balance)/i;
+
 export class SmsEngine {
   private readonly classifier: LinearClassifier;
 
@@ -73,6 +81,22 @@ export class SmsEngine {
         scores,
         reason: 'ml_linear',
       };
+      const ml = classification.category;
+      if ((ml === 'Promotions' || ml === 'Transactions') && SERVICE_NOTICE_RE.test(sms.body)) {
+        classification = {
+          category: 'Priority',
+          confidence: 0.95,
+          scores: [0.01, 0.01, 0.01, 0.95, 0.02],
+          reason: 'service_rule',
+        };
+      } else if (ml === 'Transactions' && LOYALTY_RE.test(sms.body)) {
+        classification = {
+          category: 'Promotions',
+          confidence: 0.95,
+          scores: [0.01, 0.02, 0.95, 0.01, 0.01],
+          reason: 'service_rule',
+        };
+      }
     }
 
     return {
