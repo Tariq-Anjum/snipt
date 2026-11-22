@@ -25,6 +25,12 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_dialog::init());
     let builder = builder.setup(|app| {
         let dir = app.path().app_data_dir()?;
+        // Linux: the plaintext DB lives here, so the dir is 0700 (created or
+        // tightened) and `Store::open` makes the DB/WAL/SHM 0600 before
+        // SQLite touches them. Android's app data dir is already private.
+        #[cfg(not(target_os = "android"))]
+        sms_store::fsperm::create_private_dir(&dir)?;
+        #[cfg(target_os = "android")]
         std::fs::create_dir_all(&dir)?;
         #[cfg(target_os = "android")]
         let state = {

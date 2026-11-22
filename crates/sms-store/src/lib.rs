@@ -13,6 +13,7 @@ use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior};
 use sms_engine::SmsEngine;
 
 pub mod finance;
+pub mod fsperm;
 pub mod ingest;
 pub mod migrate;
 pub mod platform;
@@ -36,6 +37,8 @@ pub enum StoreError {
     FutureSchema(i64),
     #[error("invalid input: {0}")]
     Invalid(&'static str),
+    #[error("database file: {0}")]
+    Io(std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -80,7 +83,12 @@ pub struct Store {
 }
 
 impl Store {
+    /// Opens (creating if needed) the database file. On unix the file is
+    /// created/tightened to 0600 first, so SQLite's `-wal`/`-shm` files
+    /// inherit owner-only permissions ([`fsperm::prepare_private_db`]).
     pub fn open(path: impl AsRef<Path>, tz_offset_min: i32) -> Result<Store> {
+        let path = path.as_ref();
+        fsperm::prepare_private_db(path).map_err(StoreError::Io)?;
         Self::init(Connection::open(path)?, tz_offset_min)
     }
 
