@@ -21,7 +21,7 @@ import {
 } from '../api';
 import { formatFullDateTime } from '../utils/format';
 
-interface CloudBackupSectionProps {
+export interface CloudBackupSectionProps {
   preferredProvider: CloudBackupProvider;
   onChangeProvider: (provider: CloudBackupProvider) => void;
   lastBackupAtMs: number | null;

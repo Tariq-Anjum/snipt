@@ -629,9 +629,11 @@ impl Store {
 
     /// Provider ids recorded for the given store ids (ids without one are skipped).
     pub fn provider_refs(&self, ids: &[i64]) -> Result<Vec<ProviderRef>> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT provider_id FROM messages WHERE id = ?1")?;
+        self.lookup_provider_refs(ids, "SELECT provider_id FROM messages WHERE id = ?1")
+    }
+
+    pub(super) fn lookup_provider_refs(&self, ids: &[i64], sql: &str) -> Result<Vec<ProviderRef>> {
+        let mut stmt = self.conn.prepare_cached(sql)?;
         let mut out = Vec::new();
         for id in ids {
             let p: Option<Option<i64>> = stmt.query_row([id], |r| r.get(0)).optional()?;

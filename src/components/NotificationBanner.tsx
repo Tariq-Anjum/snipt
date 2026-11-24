@@ -1,8 +1,9 @@
-import { Check, Copy, Lock, Reply, Send, Trash2, X } from 'lucide-react';
+import { Check, Lock, Reply, Send, Trash2, X } from 'lucide-react';
 import { AnimatePresence, m } from 'motion/react';
 import { useState, type FormEvent } from 'react';
 import { vaultReveal, type NotificationPayload } from '../api';
 import { formatInr } from '../utils/format';
+import { OtpCopyLabel } from './OtpCopyLabel';
 
 interface NotificationBannerProps {
   notification: NotificationPayload | null;
@@ -128,17 +129,7 @@ export function NotificationBanner({
               onClick={() => void handleCopy()}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-md transition-colors whitespace-nowrap"
             >
-              {copied ? (
-                <>
-                  <Check className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Copied</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Copy OTP</span>
-                </>
-              )}
+              <OtpCopyLabel copied={copied} />
             </button>
           )}
 

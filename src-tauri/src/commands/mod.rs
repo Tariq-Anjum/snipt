@@ -177,13 +177,14 @@ pub async fn delete_messages<R: Runtime>(
     let (ids, busy) = state.run(move |c| c.reserve_delete(&ids)).await?;
     let reserved = ids.clone();
     let out = delete_reserved(&app, &state, ids).await;
-    let _ = state
+    let released = state
         .run(move |c| {
             c.release_delete(&reserved);
             Ok(())
         })
         .await;
     let mut out = out?;
+    released?;
     out.failed_ids.extend(busy);
     Ok(out)
 }

@@ -2,9 +2,7 @@ import {
   Archive,
   ArchiveRestore,
   ArrowLeft,
-  Check,
   CheckCheck,
-  Copy,
   Eye,
   EyeOff,
   Languages,
@@ -40,6 +38,7 @@ import {
 } from '../api';
 import { acquireVaultSecure } from '../api/telephony';
 import { MmsAttachments } from './MmsAttachments';
+import { OtpCopyLabel } from './OtpCopyLabel';
 import { useThreadMessages, useTranslation } from '../hooks/data';
 import { CATEGORY_LIST } from '../engine/types';
 import { formatSenderKindLabel } from '../engine/dlt';
@@ -264,17 +263,7 @@ const Bubble = memo(function Bubble({
                 onClick={() => void copyCode()}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 dark:bg-blue-600 dark:hover:bg-blue-500 rounded-lg transition-colors"
               >
-                {copied ? (
-                  <>
-                    <Check className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Copied</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Copy OTP</span>
-                  </>
-                )}
+                <OtpCopyLabel copied={copied} />
               </button>
             </div>
             {otpError && (
@@ -504,7 +493,10 @@ export function ThreadPane({
         );
         onChanged();
       })
-      .catch(onChanged);
+      .catch(() => {
+        setActionError('Could not confirm the message was deleted.');
+        onChanged();
+      });
   };
 
   const toggleArchive = () => {

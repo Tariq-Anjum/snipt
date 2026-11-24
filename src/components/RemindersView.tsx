@@ -1,7 +1,5 @@
 import {
   ArrowUpRight,
-  Check,
-  Copy,
   Eye,
   EyeOff,
   Lock,
@@ -16,21 +14,16 @@ import {
   type CloudBackupProvider,
   type OtpItemView,
   type ReminderItem,
-  type RestoreReport,
   type WeeklyScanReport,
 } from '../api';
 import { formatCountdown, formatFullDateTime } from '../utils/format';
-import { CloudBackupSection } from './CloudBackupSection';
+import { CloudBackupSection, type CloudBackupSectionProps } from './CloudBackupSection';
+import { OtpCopyLabel } from './OtpCopyLabel';
 
-interface RemindersViewProps {
+interface RemindersViewProps
+  extends Omit<CloudBackupSectionProps, 'preferredProvider' | 'onChangeProvider'> {
   preferredCloudProvider: CloudBackupProvider;
   onChangeCloudProvider: (provider: CloudBackupProvider) => void;
-  lastBackupAtMs: number | null;
-  onBackupSuccess: (timestampMs: number) => void;
-  onRestored: (report: RestoreReport) => void;
-  readOnly: boolean;
-  nativePicker: boolean | null;
-  onImportMissing?: () => Promise<number>;
   otps: OtpItemView[];
   reminders: ReminderItem[];
   remindersLoading: boolean;
@@ -446,17 +439,7 @@ export function RemindersView({
                         aria-label={`Copy OTP from ${item.sender}`}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 dark:bg-blue-600 dark:hover:bg-blue-500 rounded-lg transition-colors whitespace-nowrap"
                       >
-                        {copiedId === item.smsId ? (
-                          <>
-                            <Check className="w-3.5 h-3.5" aria-hidden="true" />
-                            <span>Copied</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                            <span>Copy</span>
-                          </>
-                        )}
+                        <OtpCopyLabel copied={copiedId === item.smsId} label="Copy" />
                       </button>
 
                       <button

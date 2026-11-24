@@ -451,19 +451,6 @@ impl Store {
 
     /// `(id, mms_id)` for the given store ids (rows without one skipped).
     pub fn mms_refs(&self, ids: &[i64]) -> Result<Vec<ProviderRef>> {
-        let mut st = self
-            .conn
-            .prepare_cached("SELECT mms_id FROM messages WHERE id = ?1")?;
-        let mut out = Vec::new();
-        for id in ids {
-            let p: Option<Option<i64>> = st.query_row([id], |r| r.get(0)).optional()?;
-            if let Some(pid) = p.flatten() {
-                out.push(ProviderRef {
-                    id: *id,
-                    provider_id: pid,
-                });
-            }
-        }
-        Ok(out)
+        self.lookup_provider_refs(ids, "SELECT mms_id FROM messages WHERE id = ?1")
     }
 }

@@ -616,7 +616,10 @@ export default function App() {
           setNotice('Could not delete the message from the system SMS store; it is kept. Try again.');
         bump();
       })
-      .catch(bump);
+      .catch(() => {
+        setNotice('Could not confirm the message was deleted.');
+        bump();
+      });
 
   const handleApplyCleanup = async (buckets: CleanupBucketId[]): Promise<number> => {
     const removed = await applyCleanup(buckets);
