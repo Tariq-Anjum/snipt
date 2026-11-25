@@ -2,12 +2,15 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Database,
   Moon,
+  PenSquare,
   Search,
+  Sparkles,
   Sun,
   X,
 } from 'lucide-react';
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import type { DesignStyle } from './TopBar';
+import type { OperatingMode } from './SettingsSheet';
 import { ThreadPane } from './ThreadPane';
 import type {
   Capabilities,
@@ -17,6 +20,11 @@ import type {
   SimFilter,
   ThreadRow,
 } from '../api';
+import {
+  looksLikePhoneNumber,
+  resolveContactName,
+  type SavedContact,
+} from '../engine/contacts';
 import { useThreadList, useTranslation } from '../hooks/data';
 import { formatMoney, formatShortTime, getInitials } from '../utils/format';
 
@@ -53,6 +61,12 @@ interface InboxViewProps {
   onGoToBackup: () => void;
   nowMs: number;
   textScale: number;
+  operatingMode: OperatingMode;
+  contacts: SavedContact[];
+  contactsGranted: boolean;
+  onSaveContact: (input: { name: string; phone: string }) => void;
+  onOpenNewMessage: () => void;
+  onOpenSimulate?: () => void;
 }
 
 const PRIMARY_FILTERS: InboxFilter[] = [
@@ -99,6 +113,7 @@ function categoryAvatarClass(cat: Category): string {
 
 interface RowProps {
   thread: ThreadRow;
+  resolvedName: string;
   selected: boolean;
   autoTranslate: boolean;
   nowMs: number;
@@ -108,6 +123,7 @@ interface RowProps {
 
 const ThreadListRow = memo(function ThreadListRow({
   thread,
+  resolvedName,
   selected,
   autoTranslate,
   nowMs,
@@ -134,8 +150,8 @@ const ThreadListRow = memo(function ThreadListRow({
       type="button"
       onClick={() => onSelect(thread)}
       style={{ height: rowHeight }}
-      className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-colors border-b border-slate-100 dark:border-slate-800/80 focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-blue-600 ${
-        selected ? 'bg-blue-50/80 dark:bg-blue-950/35' : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+      className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-colors border-b border-slate-100/80 dark:border-slate-800/80 focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-blue-600 ${
+        selected ? 'bg-blue-50/80 dark:bg-blue-950/35' : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
       }`}
     >
       <div
@@ -144,7 +160,7 @@ const ThreadListRow = memo(function ThreadListRow({
           thread.classification.category
         )}`}
       >
-        {getInitials(thread.displayName)}
+        {getInitials(resolvedName)}
       </div>
 
       <div className="min-w-0 flex-1">
@@ -156,7 +172,7 @@ const ThreadListRow = memo(function ThreadListRow({
                 : 'font-medium text-slate-800 dark:text-slate-200'
             }`}
           >
-            {thread.displayName}
+            {resolvedName}
           </span>
           <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0">
             {formatShortTime(thread.latestTs, nowMs)}
@@ -213,6 +229,8 @@ function ThreadList({
   onSelect,
   scrollRef,
   textScale,
+  contacts,
+  contactsGranted,
 }: {
   threads: ThreadRow[];
   hasMore: boolean;
@@ -223,6 +241,8 @@ function ThreadList({
   onSelect: (t: ThreadRow) => void;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   textScale: number;
+  contacts: SavedContact[];
+  contactsGranted: boolean;
 }) {
   const rowHeight = rowHeightFor(textScale);
   const virt = useVirtualizer({
@@ -231,18 +251,14 @@ function ThreadList({
     estimateSize: () => rowHeight,
     overscan: 8,
     getItemKey: (i) => threads[i].threadId,
-    // React 19: no flushSync re-render on every scroll event (it blocked the
-    // main thread mid-fling); fixed-height rows need no synchronous commit.
     useFlushSync: false,
   });
-  // Text scale changed: every row height changed.
   useEffect(() => {
     virt.measure();
   }, [rowHeight, virt]);
   const items = virt.getVirtualItems();
   const lastIndex = items.length ? items[items.length - 1].index : -1;
 
-  // Prefetch the next keyset page at 70 % of what is loaded.
   useEffect(() => {
     if (hasMore && lastIndex >= Math.floor(threads.length * 0.7)) loadMore();
   }, [hasMore, lastIndex, threads.length, loadMore]);
@@ -251,6 +267,10 @@ function ThreadList({
     <div style={{ height: virt.getTotalSize(), position: 'relative', width: '100%' }}>
       {items.map((v) => {
         const t = threads[v.index];
+        const savedName = resolveContactName(t.sender, contacts, contactsGranted);
+        const resolvedName =
+          savedName ??
+          (looksLikePhoneNumber(t.sender) && !contactsGranted ? t.sender : t.displayName);
         return (
           <div
             key={v.key}
@@ -266,6 +286,7 @@ function ThreadList({
           >
             <ThreadListRow
               thread={t}
+              resolvedName={resolvedName}
               selected={selectedId === t.threadId}
               autoTranslate={autoTranslate}
               nowMs={nowMs}
@@ -311,6 +332,12 @@ export function InboxView({
   onGoToBackup,
   nowMs,
   textScale,
+  operatingMode,
+  contacts,
+  contactsGranted,
+  onSaveContact,
+  onOpenNewMessage,
+  onOpenSimulate,
 }: InboxViewProps) {
   const { threads, hasMore, loading, error, loadMore } = useThreadList(
     activeFilter,
@@ -320,17 +347,39 @@ export function InboxView({
   );
   const listRef = useRef<HTMLDivElement>(null);
   const noFilters = !searchQuery && activeFilter === 'All' && simFilter === 'all';
+  const companionMode = operatingMode === 'companion';
+
+  const visibleSecondaryFilters = useMemo(() => {
+    const showRcs = caps.rcs || companionMode || (counts?.filters.RCS ?? 0) > 0;
+    return SECONDARY_FILTERS.filter((f) => (f === 'RCS' ? showRcs : true));
+  }, [caps.rcs, companionMode, counts?.filters.RCS]);
+
+  const selectedResolvedName = useMemo(() => {
+    if (!selectedThread) return null;
+    const saved = resolveContactName(selectedThread.sender, contacts, contactsGranted);
+    if (saved) return saved;
+    if (looksLikePhoneNumber(selectedThread.sender) && !contactsGranted) {
+      return selectedThread.sender;
+    }
+    return selectedThread.displayName;
+  }, [selectedThread, contacts, contactsGranted]);
+
+  const selectedIsUnsavedNumber = useMemo(() => {
+    if (!selectedThread) return false;
+    if (!looksLikePhoneNumber(selectedThread.sender)) return false;
+    return !resolveContactName(selectedThread.sender, contacts, true);
+  }, [selectedThread, contacts]);
 
   return (
-    <div className="flex-1 flex min-h-0 overflow-hidden bg-slate-50 dark:bg-slate-950 glass:bg-transparent">
+    <div className="flex-1 flex min-h-0 overflow-hidden bg-slate-50 dark:bg-slate-950 glass:bg-transparent lg:p-3 lg:gap-3">
       {/* Pane 1: Desktop Category, RCS, SIM, Capacity, Translation & Surface Style Rail */}
       <aside
         aria-label="Inbox folders and SIM filter"
-        className="hidden lg:flex w-60 shrink-0 flex-col justify-between bg-white dark:bg-slate-900 glass-chrome border-r border-slate-200 dark:border-slate-800 px-3.5 py-3 overflow-y-auto smooth-scroll-layer"
+        className="hidden lg:flex w-60 shrink-0 flex-col justify-between bg-white dark:bg-slate-900 glass-panel lg:rounded-3xl border-r lg:border border-slate-200/80 dark:border-slate-800 px-3.5 py-3.5 overflow-y-auto smooth-scroll-layer"
       >
         <div className="space-y-3.5">
           <div>
-            <h2 className="px-2.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5">
+            <h2 className="px-2.5 font-mono text-[10px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 mb-1.5">
               Categories
             </h2>
             <div className="space-y-0.5">
@@ -342,14 +391,22 @@ export function InboxView({
                     type="button"
                     onClick={() => onChangeFilter(filter)}
                     aria-pressed={active}
-                    className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm rounded-lg transition-colors ${
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm rounded-xl transition-colors ${
                       active
-                        ? 'bg-blue-50 text-blue-800 font-semibold dark:bg-blue-950/60 dark:text-blue-300'
-                        : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800/70'
+                        ? 'snipt-accent-bg snipt-accent-on-solid font-semibold shadow-xs'
+                        : 'text-slate-700 hover:bg-slate-100/80 dark:text-slate-300 dark:hover:bg-slate-800/70'
                     }`}
                   >
                     <span className="truncate">{filter}</span>
-                    <FilterCount n={counts?.filters[filter]} />
+                    {counts?.filters[filter] !== undefined && (
+                      <span
+                        className={`font-mono text-xs tabular-nums ${
+                          active ? 'opacity-85' : 'text-slate-500 dark:text-slate-400'
+                        }`}
+                      >
+                        {counts.filters[filter].toLocaleString('en-IN')}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -357,11 +414,11 @@ export function InboxView({
           </div>
 
           <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-            <h2 className="px-2.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5">
+            <h2 className="px-2.5 font-mono text-[10px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 mb-1.5">
               Collections
             </h2>
             <div className="space-y-0.5">
-              {SECONDARY_FILTERS.map((filter) => {
+              {visibleSecondaryFilters.map((filter) => {
                 const active = activeFilter === filter;
                 return (
                   <button
@@ -369,16 +426,24 @@ export function InboxView({
                     type="button"
                     onClick={() => onChangeFilter(filter)}
                     aria-pressed={active}
-                    className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm rounded-lg transition-colors ${
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 text-sm rounded-xl transition-colors ${
                       active
-                        ? 'bg-blue-50 text-blue-800 font-semibold dark:bg-blue-950/60 dark:text-blue-300'
-                        : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800/70'
+                        ? 'snipt-accent-bg snipt-accent-on-solid font-semibold shadow-xs'
+                        : 'text-slate-700 hover:bg-slate-100/80 dark:text-slate-300 dark:hover:bg-slate-800/70'
                     }`}
                   >
                     <span className="truncate">
                       {filter === 'RCS' ? 'RCS Chats' : filter}
                     </span>
-                    <FilterCount n={counts?.filters[filter]} />
+                    {counts?.filters[filter] !== undefined && (
+                      <span
+                        className={`font-mono text-xs tabular-nums ${
+                          active ? 'opacity-85' : 'text-slate-500 dark:text-slate-400'
+                        }`}
+                      >
+                        {counts.filters[filter].toLocaleString('en-IN')}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -446,17 +511,29 @@ export function InboxView({
             </div>
           )}
 
-          {import.meta.env.DEV && onLoadSample && (
-            <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={onLoadSample}
-                disabled={isLoadingSample}
-                className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg transition-colors"
-              >
-                <Database className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>{isLoadingSample ? 'Indexing 10,000...' : 'Load 10,000 sample SMS (dev)'}</span>
-              </button>
+          {(onOpenSimulate || (import.meta.env.DEV && onLoadSample)) && (
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+              {onOpenSimulate && (
+                <button
+                  type="button"
+                  onClick={onOpenSimulate}
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                >
+                  <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Simulate Incoming SMS</span>
+                </button>
+              )}
+              {import.meta.env.DEV && onLoadSample && (
+                <button
+                  type="button"
+                  onClick={onLoadSample}
+                  disabled={isLoadingSample}
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                >
+                  <Database className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{isLoadingSample ? 'Indexing 10,000...' : 'Load 10,000 sample SMS'}</span>
+                </button>
+              )}
             </div>
           )}
 
@@ -582,46 +659,48 @@ export function InboxView({
         aria-label="Conversation list"
         className={`${
           selectedThread ? 'hidden md:flex' : 'flex'
-        } w-full md:w-[340px] xl:w-[380px] shrink-0 flex-col bg-white dark:bg-slate-900 glass-panel border-r border-slate-200 dark:border-slate-800 min-h-0`}
+        } w-full md:w-[360px] xl:w-[400px] shrink-0 flex-col bg-white dark:bg-slate-900 glass-panel lg:rounded-3xl border-r lg:border border-slate-200/80 dark:border-slate-800 min-h-0 overflow-hidden`}
       >
-        <div className="p-3.5 border-b border-slate-200 dark:border-slate-800 space-y-3">
-          <div className="relative">
-            <Search
-              className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-              aria-hidden="true"
-            />
-            <input
-              type="search"
-              aria-label="Search SMS and RCS messages, OTPs, UPI merchants, or PNRs"
-              value={searchQuery}
-              onChange={(e) => onChangeSearch(e.target.value)}
-              placeholder="Search SMS, RCS, UPI, OTP, PNR..."
-              className="w-full pl-9 pr-8 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => onChangeSearch('')}
-                aria-label="Clear search query"
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
-              >
-                <X className="w-3.5 h-3.5" aria-hidden="true" />
-              </button>
-            )}
+        <div className="p-3.5 border-b border-slate-200/80 dark:border-slate-800 space-y-3">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 min-w-0">
+              <Search
+                className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                aria-label="Search SMS and RCS messages, OTPs, UPI merchants, or PNRs"
+                value={searchQuery}
+                onChange={(e) => onChangeSearch(e.target.value)}
+                placeholder="Search messages, contacts, UPI, OTP..."
+                className="w-full pl-9 pr-8 py-2 text-sm bg-slate-50/90 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => onChangeSearch('')}
+                  aria-label="Clear search query"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Mobile / Tablet Horizontal Category Selector */}
           <div className="flex lg:hidden items-center gap-1 overflow-x-auto pb-0.5">
-            {[...PRIMARY_FILTERS, ...SECONDARY_FILTERS].map((filter) => {
+            {[...PRIMARY_FILTERS, ...visibleSecondaryFilters].map((filter) => {
               const active = activeFilter === filter;
               return (
                 <button
                   key={filter}
                   type="button"
                   onClick={() => onChangeFilter(filter)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 min-h-[34px] ${
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 min-h-[34px] ${
                     active
-                      ? 'bg-blue-700 text-white dark:bg-blue-600'
+                      ? 'snipt-accent-bg snipt-accent-on-solid'
                       : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
                   }`}
                 >
@@ -655,7 +734,9 @@ export function InboxView({
                 </button>
               ))}
             </div>
-
+            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+              {companionMode ? 'RCS Companion' : 'Default SMS'}
+            </span>
           </div>
         </div>
 
@@ -712,6 +793,8 @@ export function InboxView({
               onSelect={onSelectThread}
               scrollRef={listRef}
               textScale={textScale}
+              contacts={contacts}
+              contactsGranted={contactsGranted}
             />
           )}
         </div>
@@ -722,15 +805,40 @@ export function InboxView({
         aria-label="Active conversation"
         className={`${
           selectedThread ? 'flex' : 'hidden md:flex'
-        } flex-1 min-w-0 flex-col bg-slate-50 dark:bg-slate-950 glass:bg-transparent min-h-0`}
+        } flex-1 min-w-0 flex-col bg-slate-50 dark:bg-slate-950 glass-panel lg:rounded-3xl lg:border border-slate-200/80 dark:border-slate-800 min-h-0 overflow-hidden`}
       >
         {!selectedThread ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-            <h2 className="font-display text-base font-semibold text-slate-900 dark:text-slate-100">
-              Select a conversation
+          <div className="flex-1 flex flex-col items-center justify-center p-10 text-center">
+            <h2 className="font-brand-italic text-3xl text-slate-900 dark:text-slate-100 tracking-tight">
+              Select a conversation.
             </h2>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400 max-w-sm">
-              Choose a thread to inspect encrypted OTPs, UPI/Card transactions, reminders, and engine scores.
+            <p className="mt-2.5 text-sm text-slate-500 dark:text-slate-400 max-w-sm leading-relaxed">
+              Inspect encrypted OTPs, UPI and card spends, offline translations, and smart reminders — or start a new SMS with any contact.
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-2.5">
+              <button
+                type="button"
+                onClick={onOpenNewMessage}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl snipt-accent-bg snipt-accent-on-solid hover:opacity-90 transition-opacity whitespace-nowrap"
+              >
+                <PenSquare className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>New Message</span>
+              </button>
+              {onOpenSimulate && (
+                <button
+                  type="button"
+                  onClick={onOpenSimulate}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/80 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap"
+                >
+                  <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Simulate SMS</span>
+                </button>
+              )}
+            </div>
+            <p className="mt-8 font-mono text-[11px] text-slate-400 dark:text-slate-500">
+              {companionMode
+                ? 'RCS Companion Mode active · Google Messages keeps native E2E RCS'
+                : 'Default SMS Mode · Native telephony SMS'}
             </p>
           </div>
         ) : (
@@ -747,6 +855,10 @@ export function InboxView({
             onChanged={onChanged}
             onThreadPatched={onThreadPatched}
             caps={caps}
+            companionMode={companionMode}
+            resolvedContactName={selectedResolvedName}
+            isUnsavedNumber={selectedIsUnsavedNumber}
+            onSaveContact={onSaveContact}
           />
         )}
       </section>

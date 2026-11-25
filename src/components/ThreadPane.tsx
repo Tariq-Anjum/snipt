@@ -13,6 +13,7 @@ import {
   SlidersHorizontal,
   Star,
   Trash2,
+  UserPlus,
 } from 'lucide-react';
 import {
   memo,
@@ -61,6 +62,10 @@ interface ThreadPaneProps {
   onChanged: () => void;
   onThreadPatched: (patch: Partial<ThreadRow>) => void;
   caps: Capabilities;
+  companionMode: boolean;
+  resolvedContactName?: string | null;
+  isUnsavedNumber?: boolean;
+  onSaveContact?: (input: { name: string; phone: string }) => void;
 }
 
 const SEND_STATUS_LABEL: Record<SendStatus, string> = {
@@ -169,7 +174,7 @@ const Bubble = memo(function Bubble({
       <div
         className={`max-w-[92%] md:max-w-[78%] rounded-2xl px-4 py-3 border ${
           isOut
-            ? 'bg-blue-700 text-white border-blue-700 dark:bg-blue-600 dark:border-blue-600 glass-bubble-out'
+            ? 'snipt-accent-bg snipt-accent-on-solid border-transparent glass-bubble-out'
             : 'bg-white text-slate-900 border-slate-200 dark:bg-slate-900 dark:text-slate-100 dark:border-slate-800 glass-bubble-in'
         }`}
       >
@@ -397,8 +402,14 @@ export function ThreadPane({
   onChanged,
   onThreadPatched,
   caps,
+  companionMode,
+  resolvedContactName,
+  isUnsavedNumber = false,
+  onSaveContact,
 }: ThreadPaneProps) {
   const [showInspector, setShowInspector] = useState(false);
+  const [saveContactOpen, setSaveContactOpen] = useState(false);
+  const [contactDraftName, setContactDraftName] = useState('');
   const { messages, hasOlder, loadOlder, patch, append, openedAt, prepended } =
     useThreadMessages(thread.threadId, version);
   const [replyText, setReplyText] = useState('');
@@ -408,6 +419,7 @@ export function ThreadPane({
   const [actionError, setActionError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const done = new Set(completedReminderIds);
+  const effectiveName = resolvedContactName || thread.displayName;
 
   // Plain DOM list (threads page in 50 at a time): the browser scrolls it on
   // the compositor with no per-frame JS. Off-screen bubbles skip layout and
@@ -528,14 +540,18 @@ export function ThreadPane({
 
           <div className="min-w-0">
             <h1 className="font-display text-base font-semibold text-slate-900 dark:text-slate-100 truncate">
-              {thread.displayName}
+              {effectiveName}
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
               <span className="font-mono">{thread.sender}</span>
               <span aria-hidden="true"> · </span>
               <span>
                 {thread.isRcsCapable
-                  ? 'RCS Encrypted Chat'
+                  ? companionMode
+                    ? 'RCS via Google Messages Companion'
+                    : caps.rcs
+                      ? 'RCS Chat'
+                      : 'Imported RCS · Replies via SMS'
                   : formatSenderKindLabel(thread.senderKind)}
               </span>
               <span aria-hidden="true"> · </span>
@@ -549,6 +565,17 @@ export function ThreadPane({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {isUnsavedNumber && onSaveContact && (
+            <button
+              type="button"
+              onClick={() => setSaveContactOpen((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-950 transition-colors whitespace-nowrap min-h-[36px]"
+            >
+              <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">Save Contact</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => setShowInspector((prev) => !prev)}
@@ -567,7 +594,7 @@ export function ThreadPane({
             type="button"
             onClick={toggleArchive}
             aria-label={
-              thread.isArchived ? `Unarchive ${thread.displayName}` : `Archive ${thread.displayName}`
+              thread.isArchived ? `Unarchive ${effectiveName}` : `Archive ${effectiveName}`
             }
             className="min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
           >
@@ -583,8 +610,8 @@ export function ThreadPane({
             onClick={toggleBlock}
             aria-label={
               thread.isBlocked
-                ? `Unblock ${thread.displayName}`
-                : `Mark ${thread.displayName} as spam`
+                ? `Unblock ${effectiveName}`
+                : `Mark ${effectiveName} as spam`
             }
             className={`min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg transition-colors ${
               thread.isBlocked
@@ -600,6 +627,44 @@ export function ThreadPane({
           </button>
         </div>
       </div>
+
+      {saveContactOpen && onSaveContact && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!contactDraftName.trim()) return;
+            onSaveContact({ name: contactDraftName.trim(), phone: thread.sender });
+            setContactDraftName('');
+            setSaveContactOpen(false);
+          }}
+          className="bg-blue-50/80 dark:bg-blue-950/30 border-b border-blue-200/80 dark:border-blue-900/60 px-4 md:px-6 py-2.5 flex flex-wrap items-center gap-2"
+        >
+          <span className="text-xs font-medium text-blue-900 dark:text-blue-200">
+            Save <span className="font-mono">{thread.sender}</span> as:
+          </span>
+          <input
+            type="text"
+            value={contactDraftName}
+            onChange={(e) => setContactDraftName(e.target.value)}
+            placeholder="Contact name (e.g. Ananya)"
+            className="flex-1 min-w-[160px] px-3 py-1.5 text-xs rounded-lg border border-blue-200 dark:border-blue-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+          />
+          <button
+            type="submit"
+            disabled={!contactDraftName.trim()}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg snipt-accent-bg snipt-accent-on-solid disabled:opacity-40"
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={() => setSaveContactOpen(false)}
+            className="px-2.5 py-1.5 text-xs text-slate-600 dark:text-slate-300"
+          >
+            Cancel
+          </button>
+        </form>
+      )}
 
       {showInspector && (
         <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 md:px-6 py-4">
@@ -618,7 +683,9 @@ export function ThreadPane({
                 Transport:{' '}
                 <span className="font-mono text-slate-900 dark:text-slate-200">
                   {thread.isRcsCapable
-                    ? 'RCS Universal Profile (SMS fallback)'
+                    ? companionMode
+                      ? 'Google Messages RCS Companion (RemoteInput)'
+                      : 'SMS fallback (RCS unavailable to 3rd-party apps)'
                     : `Telephony SMS · SIM ${thread.simSlot + 1}`}
                 </span>
               </p>
@@ -717,7 +784,7 @@ export function ThreadPane({
       )}
       {caps.canSend && !canReply(thread) ? (
         <div className="bg-white dark:bg-slate-900 glass-chrome border-t border-slate-200 dark:border-slate-800 px-4 md:px-6 py-2.5 mb-16 md:mb-0 text-[11px] text-slate-500 dark:text-slate-400">
-          {thread.displayName} is a business sender ID: it cannot receive replies.
+          {effectiveName} is a business sender ID: it cannot receive replies.
         </div>
       ) : caps.canSend ? (
         <form
@@ -737,17 +804,21 @@ export function ThreadPane({
             )}
             <input
               type="text"
-              aria-label={`Reply to ${thread.displayName}`}
+              aria-label={`Reply to ${effectiveName}`}
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
-              placeholder={`SMS to ${thread.displayName} via SIM ${replySim + 1}...`}
-              className="flex-1 min-w-0 px-3.5 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 min-h-[40px]"
+              placeholder={
+                thread.isRcsCapable && companionMode
+                  ? `Reply via RCS Companion to ${effectiveName}...`
+                  : `SMS to ${effectiveName} via SIM ${replySim + 1}...`
+              }
+              className="flex-1 min-w-0 px-3.5 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 min-h-[40px]"
             />
             <button
               type="submit"
               disabled={!replyText.trim() || sending}
               aria-label="Send message reply"
-              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 disabled:opacity-40 disabled:cursor-not-allowed dark:bg-blue-600 dark:hover:bg-blue-500 rounded-lg transition-colors shrink-0 min-h-[40px]"
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold snipt-accent-bg snipt-accent-on-solid hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl transition-opacity shrink-0 min-h-[40px]"
             >
               <Send className="w-3.5 h-3.5" aria-hidden="true" />
               <span className="hidden sm:inline">{sending ? 'Queuing...' : 'Send'}</span>

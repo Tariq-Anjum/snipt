@@ -27,8 +27,78 @@
     /* Message text scale (pinch in a thread or Settings > Text size). */
     --text-scale: 1;
     --font-display: 'Plus Jakarta Sans Variable', system-ui, -apple-system, sans-serif;
+    --font-brand: 'Fraunces', Georgia, 'Times New Roman', serif;
     --font-sans: 'DM Sans Variable', system-ui, -apple-system, sans-serif;
-    --font-mono: ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'DejaVu Sans Mono', Menlo, monospace;
+
+    /* Default Palette: Glass OS (Variation 6 — Iridescent Ice & Cobalt) */
+    --snipt-accent: #0047ff;
+    --snipt-accent-hover: #0039cc;
+    --snipt-accent-soft: rgba(0, 71, 255, 0.1);
+    --snipt-bg-gradient: linear-gradient(135deg, #e0eafc 0%, #cfdef3 50%, #e8f5ff 100%);
+    --snipt-bg-dark: linear-gradient(145deg, #060b16 0%, #0b1326 52%, #07101f 100%);
+    --snipt-orb-a: radial-gradient(circle, rgba(255, 255, 255, 0.85) 0%, rgba(186, 224, 255, 0.42) 52%, transparent 74%);
+    --snipt-orb-b: radial-gradient(circle, rgba(165, 243, 252, 0.52) 0%, rgba(191, 219, 254, 0.42) 52%, transparent 74%);
+    --snipt-orb-a-dark: radial-gradient(circle, rgba(0, 71, 255, 0.34) 0%, rgba(14, 116, 144, 0.16) 52%, transparent 74%);
+    --snipt-orb-b-dark: radial-gradient(circle, rgba(56, 189, 248, 0.24) 0%, rgba(30, 58, 138, 0.32) 48%, transparent 74%);
+  }
+
+  /* Theme 2: Emerald Mint (Fintech Expense Keeper) */
+  :root[data-palette='emerald'] {
+    --snipt-accent: #059669;
+    --snipt-accent-hover: #047857;
+    --snipt-accent-soft: rgba(5, 150, 105, 0.12);
+    --snipt-bg-gradient: linear-gradient(135deg, #e7f6f0 0%, #d8f1e6 48%, #eefbf6 100%);
+    --snipt-bg-dark: linear-gradient(145deg, #04120e 0%, #071f17 52%, #04130f 100%);
+    --snipt-orb-a: radial-gradient(circle, rgba(167, 243, 208, 0.65) 0%, rgba(209, 250, 229, 0.42) 52%, transparent 74%);
+    --snipt-orb-b: radial-gradient(circle, rgba(153, 246, 228, 0.48) 0%, rgba(186, 230, 253, 0.34) 52%, transparent 74%);
+    --snipt-orb-a-dark: radial-gradient(circle, rgba(16, 185, 129, 0.28) 0%, rgba(6, 95, 70, 0.16) 52%, transparent 74%);
+    --snipt-orb-b-dark: radial-gradient(circle, rgba(20, 184, 166, 0.22) 0%, rgba(15, 118, 110, 0.24) 48%, transparent 74%);
+  }
+
+  /* Theme 3: Warm Sand (Editorial Blush & Deep Indigo) */
+  :root[data-palette='warm-sand'] {
+    --snipt-accent: #1d4ed8;
+    --snipt-accent-hover: #1e40af;
+    --snipt-accent-soft: rgba(29, 78, 216, 0.1);
+    --snipt-bg-gradient: linear-gradient(135deg, #f6ebe6 0%, #efe1da 50%, #f8f2ee 100%);
+    --snipt-bg-dark: linear-gradient(145deg, #151012 0%, #1d161a 52%, #130f12 100%);
+    --snipt-orb-a: radial-gradient(circle, rgba(254, 215, 170, 0.56) 0%, rgba(253, 230, 218, 0.44) 52%, transparent 74%);
+    --snipt-orb-b: radial-gradient(circle, rgba(251, 207, 232, 0.42) 0%, rgba(224, 231, 255, 0.34) 52%, transparent 74%);
+    --snipt-orb-a-dark: radial-gradient(circle, rgba(217, 119, 6, 0.22) 0%, rgba(157, 23, 77, 0.14) 52%, transparent 74%);
+    --snipt-orb-b-dark: radial-gradient(circle, rgba(99, 102, 241, 0.22) 0%, rgba(49, 46, 129, 0.24) 48%, transparent 74%);
+  }
+
+  /* Theme 4: Midnight Iris (Deep Violet & Electric Cobalt) */
+  :root[data-palette='midnight'] {
+    --snipt-accent: #4f46e5;
+    --snipt-accent-hover: #4338ca;
+    --snipt-accent-soft: rgba(79, 70, 229, 0.12);
+    --snipt-bg-gradient: linear-gradient(135deg, #e7e9fc 0%, #dcdffb 48%, #f0f1ff 100%);
+    --snipt-bg-dark: linear-gradient(145deg, #09081a 0%, #121030 52%, #0a0920 100%);
+    --snipt-orb-a: radial-gradient(circle, rgba(199, 210, 254, 0.72) 0%, rgba(221, 214, 254, 0.45) 52%, transparent 74%);
+    --snipt-orb-b: radial-gradient(circle, rgba(186, 230, 253, 0.52) 0%, rgba(224, 231, 255, 0.42) 52%, transparent 74%);
+    --snipt-orb-a-dark: radial-gradient(circle, rgba(99, 102, 241, 0.36) 0%, rgba(67, 56, 202, 0.18) 52%, transparent 74%);
+    --snipt-orb-b-dark: radial-gradient(circle, rgba(139, 92, 246, 0.26) 0%, rgba(49, 46, 129, 0.32) 48%, transparent 74%);
+  }
+
+  /* Theme 5: Monochrome Ink (Minimal Graphite / Pure OLED) */
+  :root[data-palette='monochrome'] {
+    --snipt-accent: #0d0d0f;
+    --snipt-accent-hover: #27272a;
+    --snipt-accent-soft: rgba(13, 13, 15, 0.08);
+    --snipt-bg-gradient: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 50%, #f9fafb 100%);
+    --snipt-bg-dark: linear-gradient(145deg, #000000 0%, #0b0b0d 52%, #000000 100%);
+    --snipt-orb-a: radial-gradient(circle, rgba(255, 255, 255, 0.85) 0%, rgba(229, 231, 235, 0.55) 52%, transparent 74%);
+    --snipt-orb-b: radial-gradient(circle, rgba(243, 244, 246, 0.7) 0%, rgba(209, 213, 219, 0.4) 52%, transparent 74%);
+    --snipt-orb-a-dark: radial-gradient(circle, rgba(255, 255, 255, 0.08) 0%, rgba(113, 113, 122, 0.06) 52%, transparent 74%);
+    --snipt-orb-b-dark: radial-gradient(circle, rgba(255, 255, 255, 0.06) 0%, rgba(63, 63, 70, 0.08) 48%, transparent 74%);
+  }
+
+  .dark:root[data-palette='monochrome'] {
+    --snipt-accent: #f4f4f5;
+    --snipt-accent-hover: #e4e4e7;
+    --snipt-accent-soft: rgba(255, 255, 255, 0.14);
   }
 
   /* Edge-to-edge: Kotlin pushes --inset-* on Android; env() covers notched webviews. */
@@ -51,9 +121,32 @@
     font-family: var(--font-display);
   }
 
+  .font-brand-italic {
+    font-family: var(--font-brand);
+    font-style: italic;
+    font-variation-settings: "opsz" 48, "SOFT" 65;
+  }
+
   code, pre, .font-mono {
     font-family: var(--font-mono);
   }
+}
+
+/* Accent utility tokens synced to selected palette */
+.snipt-accent-bg {
+  background-color: var(--snipt-accent);
+}
+.snipt-accent-bg:hover {
+  background-color: var(--snipt-accent-hover);
+}
+.snipt-accent-text {
+  color: var(--snipt-accent);
+}
+.snipt-accent-on-solid {
+  color: #ffffff;
+}
+.dark[data-palette='monochrome'] .snipt-accent-on-solid {
+  color: #09090b;
 }
 
 /* Pure black (OLED) dark palette: neutral greys instead of navy slate, brighter
@@ -96,7 +189,6 @@ html.dark.amoled body {
 .ts-preview {
   font-size: calc(0.78rem * var(--text-scale));
   line-height: 1.35;
-  /* Exactly two line boxes, clipped by a plain block box. */
   height: calc(2 * 1.35em);
   overflow: hidden;
 }
@@ -113,37 +205,43 @@ html.dark.amoled body {
 }
 
 /* ============================================================================
- * Snipt Liquid Glass Optical Surface System
- * Compositor-only animations (transform/opacity) for 60/90/120Hz+ adaptive displays.
+ * Snipt Glass OS Optical Surface System (Variation 6 + Zero-Idle-Frame)
+ * Compositor-only animations (transform/opacity) for 60/90/120Hz+ displays.
  * Zero !important overrides — scoped cleanly via .liquid-glass on <html>.
  * ============================================================================ */
 
-/* Ambient glow orbs in App.tsx stay static so idle screens render 0 FPS on 90/120 Hz panels. */
+.ambient-canvas {
+  background: var(--snipt-bg-gradient);
+}
 
-/* Blur budget (UI-PLAN 3): at most 3 blurred surfaces on screen (top bar, dock or
- * sidebar, thread header) plus one sheet. Cards, rows and bubbles are a
- * translucent gradient + 1px highlight with NO backdrop-filter. */
+.dark .ambient-canvas {
+  background: var(--snipt-bg-dark);
+}
+
+.dark.amoled .ambient-canvas {
+  background: #000000;
+}
 
 /* Primary frosted glass chrome (header, sidebars, bottom dock) */
 .liquid-glass .glass-chrome {
   background: linear-gradient(
     180deg,
-    rgba(255, 255, 255, 0.78) 0%,
-    rgba(248, 251, 255, 0.66) 100%
+    rgba(255, 255, 255, 0.56) 0%,
+    rgba(255, 255, 255, 0.36) 100%
   );
   backdrop-filter: blur(24px) saturate(185%);
   -webkit-backdrop-filter: blur(24px) saturate(185%);
-  border-color: rgba(255, 255, 255, 0.72);
+  border-color: rgba(255, 255, 255, 0.62);
   box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.92),
-    0 8px 28px -14px rgba(15, 23, 42, 0.12);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.9),
+    0 8px 32px -12px rgba(13, 13, 15, 0.08);
 }
 
 .liquid-glass.dark .glass-chrome {
   background: linear-gradient(
     180deg,
-    rgba(19, 29, 48, 0.74) 0%,
-    rgba(13, 21, 37, 0.64) 100%
+    rgba(19, 29, 48, 0.72) 0%,
+    rgba(13, 21, 37, 0.58) 100%
   );
   border-color: rgba(148, 163, 184, 0.18);
   box-shadow:
@@ -151,18 +249,17 @@ html.dark.amoled body {
     0 12px 32px -14px rgba(2, 6, 23, 0.55);
 }
 
-/* Sculptural Liquid Glass panel (cards, conversation list): no blur */
+/* Sculptural Liquid Glass panel (cards, conversation list): Variation 6 airy frosted depth */
 .liquid-glass .glass-panel {
   background: linear-gradient(
     155deg,
-    rgba(255, 255, 255, 0.74) 0%,
-    rgba(248, 252, 255, 0.54) 100%
+    rgba(255, 255, 255, 0.64) 0%,
+    rgba(255, 255, 255, 0.42) 100%
   );
-  border-color: rgba(255, 255, 255, 0.78);
+  border-color: rgba(255, 255, 255, 0.68);
   box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.9),
-    inset 0 0 0 0.5px rgba(148, 163, 184, 0.18),
-    0 10px 30px -16px rgba(15, 23, 42, 0.12);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.92),
+    0 8px 32px -14px rgba(13, 13, 15, 0.08);
 }
 
 .liquid-glass.dark .glass-panel {
@@ -174,19 +271,18 @@ html.dark.amoled body {
   border-color: rgba(148, 163, 184, 0.18);
   box-shadow:
     inset 0 1px 0 0 rgba(255, 255, 255, 0.14),
-    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06),
     0 14px 36px -16px rgba(2, 6, 23, 0.62);
 }
 
 /* Pure black glass: neutral smoked glass instead of navy */
 .liquid-glass.dark.amoled .glass-chrome {
-  background: linear-gradient(180deg, rgba(14, 14, 16, 0.86) 0%, rgba(6, 6, 8, 0.8) 100%);
-  border-color: rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, rgba(16, 16, 19, 0.86) 0%, rgba(8, 8, 10, 0.8) 100%);
+  border-color: rgba(255, 255, 255, 0.11);
   box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.1), 0 12px 32px -14px rgba(0, 0, 0, 0.8);
 }
 
 .liquid-glass.dark.amoled .glass-panel {
-  background: linear-gradient(155deg, rgba(22, 22, 26, 0.7) 0%, rgba(8, 8, 10, 0.55) 100%);
+  background: linear-gradient(155deg, rgba(22, 22, 26, 0.72) 0%, rgba(10, 10, 12, 0.56) 100%);
   border-color: rgba(255, 255, 255, 0.1);
   box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.09), 0 14px 36px -16px rgba(0, 0, 0, 0.85);
 }
@@ -198,7 +294,7 @@ html.dark.amoled body {
 }
 
 .liquid-glass.dark.amoled .glass-sheet {
-  background: linear-gradient(155deg, rgba(24, 24, 28, 0.94) 0%, rgba(10, 10, 12, 0.9) 100%);
+  background: linear-gradient(155deg, rgba(24, 24, 28, 0.96) 0%, rgba(10, 10, 12, 0.94) 100%);
   border-color: rgba(255, 255, 255, 0.12);
 }
 
@@ -207,29 +303,17 @@ html.dark.amoled body {
   border-color: rgba(255, 255, 255, 0.12);
 }
 
-.ambient-canvas {
-  background: #edf3fb;
-}
-
-.dark .ambient-canvas {
-  background: #070d19;
-}
-
-.dark.amoled .ambient-canvas {
-  background: #000;
-}
-
 /* Translucent specular glass bubble / button sheen: no blur */
 .liquid-glass .glass-bubble-in {
   background: linear-gradient(
     160deg,
-    rgba(255, 255, 255, 0.86) 0%,
-    rgba(246, 250, 255, 0.7) 100%
+    rgba(255, 255, 255, 0.88) 0%,
+    rgba(255, 255, 255, 0.72) 100%
   );
   border-color: rgba(255, 255, 255, 0.88);
   box-shadow:
     inset 0 1px 0 0 rgba(255, 255, 255, 0.96),
-    0 8px 24px -14px rgba(15, 23, 42, 0.14);
+    0 8px 24px -14px rgba(13, 13, 15, 0.12);
 }
 
 .liquid-glass.dark .glass-bubble-in {
@@ -245,20 +329,16 @@ html.dark.amoled body {
 }
 
 .liquid-glass .glass-bubble-out {
-  background: linear-gradient(
-    145deg,
-    rgba(37, 99, 235, 0.92) 0%,
-    rgba(29, 78, 216, 0.88) 100%
-  );
-  border-color: rgba(147, 197, 253, 0.45);
+  background: var(--snipt-accent);
+  border-color: rgba(255, 255, 255, 0.25);
   box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.38),
-    0 10px 24px -12px rgba(29, 78, 216, 0.42);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.34),
+    0 10px 24px -12px rgba(0, 71, 255, 0.35);
 }
 
 /* Sheets/dialogs: one at a time, blur <= 16px */
 .liquid-glass .glass-sheet {
-  background: linear-gradient(155deg, rgba(255, 255, 255, 0.86) 0%, rgba(248, 252, 255, 0.72) 100%);
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 252, 255, 0.94) 100%);
   backdrop-filter: blur(16px) saturate(170%);
   -webkit-backdrop-filter: blur(16px) saturate(170%);
   border-color: rgba(255, 255, 255, 0.8);
@@ -266,40 +346,32 @@ html.dark.amoled body {
 }
 
 .liquid-glass.dark .glass-sheet {
-  background: linear-gradient(155deg, rgba(24, 36, 58, 0.88) 0%, rgba(15, 23, 42, 0.78) 100%);
+  background: linear-gradient(155deg, rgba(20, 28, 46, 0.98) 0%, rgba(11, 17, 32, 0.98) 100%);
   border-color: rgba(148, 163, 184, 0.2);
   box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.14), 0 18px 48px -18px rgba(2, 6, 23, 0.7);
 }
 
 /* Toasts: translucent, never blurred */
 .liquid-glass .glass-toast {
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.96);
   border-color: rgba(255, 255, 255, 0.85);
   box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.9), 0 12px 32px -14px rgba(15, 23, 42, 0.28);
 }
 
 .liquid-glass.dark .glass-toast {
-  background: rgba(19, 29, 48, 0.94);
+  background: rgba(19, 29, 48, 0.96);
   border-color: rgba(148, 163, 184, 0.2);
 }
 
 .liquid-glass .glass-cta {
-  background: linear-gradient(
-    145deg,
-    rgba(37, 99, 235, 0.94) 0%,
-    rgba(29, 78, 216, 0.92) 100%
-  );
+  background: var(--snipt-accent);
   box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.36),
-    0 6px 18px -6px rgba(37, 99, 235, 0.45);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.34),
+    0 6px 18px -6px rgba(0, 71, 255, 0.38);
 }
 
 .liquid-glass .glass-cta:hover {
-  background: linear-gradient(
-    145deg,
-    rgba(29, 78, 216, 0.96) 0%,
-    rgba(30, 64, 175, 0.95) 100%
-  );
+  background: var(--snipt-accent-hover);
 }
 
 /* Virtualized rows: isolate layout/style so a row never reflows its siblings */
@@ -328,7 +400,7 @@ html.dark.amoled body {
 
 /* Bottom dock: list text must not read through it (legibility over glass). */
 .liquid-glass .glass-chrome.glass-dock {
-  background: linear-gradient(180deg, rgb(255, 255, 255) 0%, rgb(248, 251, 255) 100%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 251, 255, 0.98) 100%);
 }
 
 .liquid-glass.dark .glass-chrome.glass-dock {
@@ -337,19 +409,6 @@ html.dark.amoled body {
 
 .liquid-glass.dark.amoled .glass-chrome.glass-dock {
   background: linear-gradient(180deg, rgb(12, 12, 14) 0%, rgb(0, 0, 0) 100%);
-}
-
-/* Sheets over busy lists: nearly opaque so text behind never reads through. */
-.liquid-glass.dark .glass-sheet {
-  background: linear-gradient(155deg, rgba(20, 28, 46, 0.985) 0%, rgba(11, 17, 32, 0.985) 100%);
-}
-
-.liquid-glass.dark.amoled .glass-sheet {
-  background: linear-gradient(155deg, rgba(22, 22, 26, 0.985) 0%, rgba(10, 10, 12, 0.985) 100%);
-}
-
-.liquid-glass:not(.dark) .glass-sheet {
-  background: linear-gradient(155deg, rgba(255, 255, 255, 0.985) 0%, rgba(248, 252, 255, 0.98) 100%);
 }
 
 /* Settings sheet entrance (transform/opacity only). */

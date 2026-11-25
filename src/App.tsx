@@ -61,13 +61,53 @@ import {
   type ComposeDraft,
 } from './api/telephony';
 import { DEFAULT_BUDGET_LIMITS } from './engine/budget';
-import { SettingsSheet, type ThemeMode } from './components/SettingsSheet';
+import {
+  loadContacts,
+  loadContactsPermission,
+  saveContacts,
+  saveContactsPermission,
+  upsertContact,
+  type SavedContact,
+} from './engine/contacts';
+import {
+  loadEpfBalance,
+  loadManualTransactions,
+  loadSavingsGoals,
+  loadTransactionOverrides,
+  saveEpfBalance,
+  saveManualTransactions,
+  saveSavingsGoals,
+  saveTransactionOverrides,
+  type ManualTransaction,
+  type SavingsGoal,
+  type TransactionOverride,
+} from './engine/personalFinance';
+import {
+  loadLtpMap,
+  loadStockTrades,
+  parseStockSms,
+  saveLtpMap,
+  saveStockTrades,
+  type StockTrade,
+} from './engine/stocks';
+import {
+  SettingsSheet,
+  type OperatingMode,
+  type ThemeMode,
+} from './components/SettingsSheet';
 import { installPinchTextScale, useTextScale } from './utils/textScale';
 import { FinanceView } from './components/FinanceView';
 import { InboxView } from './components/InboxView';
+import { NewMessageModal } from './components/NewMessageModal';
 import { NotificationBanner } from './components/NotificationBanner';
 import { RemindersView } from './components/RemindersView';
-import { TopBar, type ActiveTab, type DesignStyle } from './components/TopBar';
+import { StocksView } from './components/StocksView';
+import {
+  TopBar,
+  type ActiveTab,
+  type ColorPalette,
+  type DesignStyle,
+} from './components/TopBar';
 import { useDebounced } from './hooks/data';
 import { popBack, subscribeBack, useBackLayer } from './utils/backStack';
 import {
@@ -105,7 +145,7 @@ if (DEV_SHOT?.get('shot') === '1') {
 }
 const devTab = (): ActiveTab => {
   const t = DEV_SHOT?.get('tab');
-  return t === 'finance' || t === 'reminders' ? t : 'inbox';
+  return t === 'finance' || t === 'stocks' || t === 'reminders' ? t : 'inbox';
 };
 
 const THEME_KEY = 'snipt-theme-v1';
@@ -125,7 +165,19 @@ interface Prefs {
   pureBlack: boolean;
   /** Android widget shows message text (off = sender names only). */
   widgetPreviews: boolean;
+  /** 5 curated accent & atmospheric themes. */
+  colorPalette: ColorPalette;
+  /** Companion Mode (default, keeps Google Messages RCS) vs Default SMS App. */
+  operatingMode: OperatingMode;
 }
+
+const VALID_PALETTES: ColorPalette[] = [
+  'glass-os',
+  'emerald',
+  'warm-sand',
+  'midnight',
+  'monochrome',
+];
 
 const DEFAULT_PREFS: Prefs = {
   scanScheduleDay: 'Every Sunday · 9:00 AM',
@@ -135,6 +187,8 @@ const DEFAULT_PREFS: Prefs = {
   secureScreen: false,
   pureBlack: true,
   widgetPreviews: true,
+  colorPalette: 'glass-os',
+  operatingMode: 'companion',
 };
 
 function loadPrefs(): Prefs {
@@ -142,7 +196,14 @@ function loadPrefs(): Prefs {
     const raw = window.localStorage.getItem(PREFS_KEY);
     if (raw) {
       const p = JSON.parse(raw) as Partial<Prefs>;
-      // Pick known keys only: drops data mirrors written by earlier builds.
+      const palette =
+        p.colorPalette && VALID_PALETTES.includes(p.colorPalette)
+          ? p.colorPalette
+          : DEFAULT_PREFS.colorPalette;
+      const opMode: OperatingMode =
+        p.operatingMode === 'default_sms' || p.operatingMode === 'companion'
+          ? p.operatingMode
+          : DEFAULT_PREFS.operatingMode;
       return {
         scanScheduleDay: p.scanScheduleDay ?? DEFAULT_PREFS.scanScheduleDay,
         autoTranslateToEnglish: p.autoTranslateToEnglish ?? DEFAULT_PREFS.autoTranslateToEnglish,
@@ -151,6 +212,8 @@ function loadPrefs(): Prefs {
         secureScreen: p.secureScreen === true,
         pureBlack: p.pureBlack ?? DEFAULT_PREFS.pureBlack,
         widgetPreviews: p.widgetPreviews ?? DEFAULT_PREFS.widgetPreviews,
+        colorPalette: palette,
+        operatingMode: opMode,
       };
     }
   } catch {
@@ -239,12 +302,27 @@ export default function App() {
   const debouncedQuery = useDebounced(searchQuery, 150);
   const [selectedThread, setSelectedThread] = useState<ThreadRow | null>(null);
   const [simulateOpen, setSimulateOpen] = useState(false);
+  const [newMessageOpen, setNewMessageOpen] = useState(false);
   const [latestNotification, setLatestNotification] = useState<NotificationPayload | null>(
     null
   );
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [isLoadingSample, setIsLoadingSample] = useState(false);
   const [clipboardClearSecondsLeft, setClipboardClearSecondsLeft] = useState<number | null>(null);
+
+  // Contacts, Stocks, and Personal Finance local offline stores
+  const [contacts, setContacts] = useState<SavedContact[]>(() => loadContacts());
+  const [contactsGranted, setContactsGranted] = useState<boolean>(() => loadContactsPermission());
+  const [stockTrades, setStockTrades] = useState<StockTrade[]>(() => loadStockTrades());
+  const [stockLtpMap, setStockLtpMap] = useState<Record<string, number>>(() => loadLtpMap());
+  const [manualTransactions, setManualTransactions] = useState<ManualTransaction[]>(() =>
+    loadManualTransactions()
+  );
+  const [txnOverrides, setTxnOverrides] = useState<Record<string, TransactionOverride>>(() =>
+    loadTransactionOverrides()
+  );
+  const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>(() => loadSavingsGoals());
+  const [epfBalance, setEpfBalance] = useState<number>(() => loadEpfBalance());
 
   const [finance, setFinance] = useState<FinanceSummary | null>(null);
   const [budget, setBudgetState] = useState<BudgetPlannerSummary | null>(null);
@@ -279,6 +357,13 @@ export default function App() {
         capsAttempt.current = 0;
         setCapsError(false);
         setCaps(c);
+        if (c.defaultSmsRole) {
+          setPrefs((prev) =>
+            prev.operatingMode === 'default_sms'
+              ? prev
+              : { ...prev, operatingMode: 'default_sms' }
+          );
+        }
       })
       .catch(() => {
         const n = ++capsAttempt.current;
@@ -414,10 +499,11 @@ export default function App() {
     const root = document.documentElement;
     root.classList.toggle('dark', theme === 'dark');
     root.classList.toggle('amoled', prefs.pureBlack);
+    root.setAttribute('data-palette', prefs.colorPalette);
     root.style.colorScheme = theme;
     // Status/navigation bar icons must contrast with the app background.
     void setSystemBars(platform, theme === 'light');
-  }, [theme, prefs.pureBlack, platform]);
+  }, [theme, prefs.pureBlack, prefs.colorPalette, platform]);
 
   useEffect(() => {
     try {
@@ -727,8 +813,145 @@ export default function App() {
       .finally(() => setIsLoadingSample(false));
   };
 
+  // ---- contacts, stocks, personal finance & compose handlers ----------------
+  const handleSaveContact = (input: { name: string; phone: string; label?: string }) => {
+    setContacts((prev) => {
+      const next = upsertContact(prev, input);
+      saveContacts(next);
+      return next;
+    });
+    if (!contactsGranted) {
+      setContactsGranted(true);
+      saveContactsPermission(true);
+    }
+    setNotice(`Saved contact ${input.name}.`);
+  };
+
+  const handleToggleContactsGranted = () => {
+    setContactsGranted((prev) => {
+      const next = !prev;
+      saveContactsPermission(next);
+      return next;
+    });
+  };
+
+  const handleSendNewMessage = async (payload: {
+    address: string;
+    contactName?: string;
+    body: string;
+    simSlot: 0 | 1;
+  }) => {
+    const res = await queueOutgoing({
+      address: payload.address,
+      body: payload.body,
+      simSlot: payload.simSlot,
+    });
+    setActiveTab('inbox');
+    setInboxFilter('All');
+    setSearchQuery('');
+    setSelectedThread(res.thread);
+    bump();
+    setNotice(
+      prefs.operatingMode === 'companion'
+        ? `Sent to ${payload.contactName || payload.address}.`
+        : `Queued SMS to ${payload.contactName || payload.address} via SIM ${payload.simSlot + 1}.`
+    );
+  };
+
+  const handleAddStockTrade = (trade: StockTrade) => {
+    setStockTrades((prev) => {
+      const next = [trade, ...prev];
+      saveStockTrades(next);
+      return next;
+    });
+    if (trade.price > 0) {
+      setStockLtpMap((prev) => {
+        if (prev[trade.symbol] !== undefined) return prev;
+        const next = { ...prev, [trade.symbol]: trade.price };
+        saveLtpMap(next);
+        return next;
+      });
+    }
+    setNotice(`Recorded ${trade.side} for ${trade.symbol}.`);
+  };
+
+  const handleDeleteStockTrade = (id: string) => {
+    setStockTrades((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      saveStockTrades(next);
+      return next;
+    });
+  };
+
+  const handleUpdateStockLtp = (symbol: string, ltp: number) => {
+    setStockLtpMap((prev) => {
+      const next = { ...prev, [symbol]: ltp };
+      saveLtpMap(next);
+      return next;
+    });
+  };
+
+  const handleAddManualTransaction = (entry: ManualTransaction) => {
+    setManualTransactions((prev) => {
+      const next = [entry, ...prev];
+      saveManualTransactions(next);
+      return next;
+    });
+    setNotice(`Added ${entry.direction === 'Credit' ? 'income' : 'expense'}: ${entry.note}.`);
+  };
+
+  const handleDeleteManualTransaction = (id: string) => {
+    setManualTransactions((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      saveManualTransactions(next);
+      return next;
+    });
+  };
+
+  const handleSaveTxnOverride = (id: string, patch: TransactionOverride) => {
+    setTxnOverrides((prev) => {
+      const next = { ...prev, [id]: patch };
+      saveTransactionOverrides(next);
+      return next;
+    });
+  };
+
+  const handleAddGoal = (goal: SavingsGoal) => {
+    setSavingsGoals((prev) => {
+      const next = [goal, ...prev];
+      saveSavingsGoals(next);
+      return next;
+    });
+    setNotice(`Created savings goal "${goal.nickname}".`);
+  };
+
+  const handleUpdateGoalSaved = (id: string, savedAmount: number) => {
+    setSavingsGoals((prev) => {
+      const next = prev.map((g) => (g.id === id ? { ...g, savedAmount } : g));
+      saveSavingsGoals(next);
+      return next;
+    });
+  };
+
+  const handleDeleteGoal = (id: string) => {
+    setSavingsGoals((prev) => {
+      const next = prev.filter((g) => g.id !== id);
+      saveSavingsGoals(next);
+      return next;
+    });
+  };
+
+  const handleChangeEpfBalance = (val: number) => {
+    setEpfBalance(val);
+    saveEpfBalance(val);
+  };
+
   // Dev simulator: goes through the same ingest command as the Android receiver.
   const handleDeliverSimulatedSms = (payload: IncomingSms) => {
+    const parsedStock = parseStockSms(payload.sender, payload.body, Date.now());
+    if (parsedStock) {
+      handleAddStockTrade(parsedStock);
+    }
     ingestIncoming(payload)
       .then((r) => {
         setNowMs(Date.now());
@@ -745,28 +968,24 @@ export default function App() {
     <LazyMotion features={domAnimation} strict>
       <MotionConfig reducedMotion="user">
         <div className="app-shell relative flex flex-col overflow-hidden bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 glass:bg-transparent">
-          {/* Luminous ambient canvas (Liquid Glass only; transform-only animation) */}
+          {/* Luminous static ambient orbs driven by active color palette (0 FPS idle) */}
           {glassActive && (
             <div
               aria-hidden="true"
               className="ambient-canvas pointer-events-none fixed inset-0 -z-10 overflow-hidden transition-colors"
             >
               <div
-                className="liquid-ambient-a absolute -top-28 -left-24 w-[58vw] h-[58vw] max-w-[780px] max-h-[780px] rounded-full opacity-85 dark:opacity-40 blur-3xl"
+                className="liquid-ambient-a absolute -top-28 -left-24 w-[58vw] h-[58vw] max-w-[780px] max-h-[780px] rounded-full opacity-90 dark:opacity-45 blur-3xl"
                 style={{
                   background:
-                    theme === 'dark'
-                      ? 'radial-gradient(circle, rgba(37,99,235,0.42) 0%, rgba(14,116,144,0.18) 52%, transparent 74%)'
-                      : 'radial-gradient(circle, rgba(125,211,252,0.62) 0%, rgba(191,219,254,0.42) 52%, transparent 74%)',
+                    theme === 'dark' ? 'var(--snipt-orb-a-dark)' : 'var(--snipt-orb-a)',
                 }}
               />
               <div
-                className="liquid-ambient-b absolute -bottom-32 -right-24 w-[62vw] h-[62vw] max-w-[840px] max-h-[840px] rounded-full opacity-80 dark:opacity-35 blur-3xl"
+                className="liquid-ambient-b absolute -bottom-32 -right-24 w-[62vw] h-[62vw] max-w-[840px] max-h-[840px] rounded-full opacity-85 dark:opacity-40 blur-3xl"
                 style={{
                   background:
-                    theme === 'dark'
-                      ? 'radial-gradient(circle, rgba(56,189,248,0.28) 0%, rgba(30,58,138,0.34) 48%, transparent 74%)'
-                      : 'radial-gradient(circle, rgba(165,243,252,0.52) 0%, rgba(199,210,254,0.42) 50%, transparent 74%)',
+                    theme === 'dark' ? 'var(--snipt-orb-b-dark)' : 'var(--snipt-orb-b)',
                 }}
               />
             </div>
@@ -775,9 +994,7 @@ export default function App() {
           <TopBar
             activeTab={activeTab}
             onSelectTab={setActiveTab}
-            onOpenSimulate={
-              import.meta.env.DEV && !DEV_SHOT?.get('shot') ? () => setSimulateOpen(true) : undefined
-            }
+            onOpenNewMessage={caps.canSend ? () => setNewMessageOpen(true) : undefined}
             unreadCount={counts?.unread ?? 0}
             pendingReminderCount={pendingRemindersCount}
             designStyle={glassActive ? 'glass' : 'solid'}
@@ -831,6 +1048,16 @@ export default function App() {
                 onGoToBackup={() => setActiveTab('reminders')}
                 nowMs={nowMs}
                 textScale={textScale}
+                operatingMode={prefs.operatingMode}
+                contacts={contacts}
+                contactsGranted={contactsGranted}
+                onSaveContact={handleSaveContact}
+                onOpenNewMessage={() => setNewMessageOpen(true)}
+                onOpenSimulate={
+                  import.meta.env.DEV && !DEV_SHOT?.get('shot')
+                    ? () => setSimulateOpen(true)
+                    : undefined
+                }
               />
             )}
 
@@ -849,12 +1076,33 @@ export default function App() {
                   budgetPeriod={budgetPeriod}
                   onChangeBudgetPeriod={handleChangeBudgetPeriod}
                   onRestoreDefaultLimits={handleRestoreDefaultLimits}
+                  manualTransactions={manualTransactions}
+                  onAddManualTransaction={handleAddManualTransaction}
+                  onDeleteManualTransaction={handleDeleteManualTransaction}
+                  txnOverrides={txnOverrides}
+                  onSaveTxnOverride={handleSaveTxnOverride}
+                  goals={savingsGoals}
+                  onAddGoal={handleAddGoal}
+                  onUpdateGoalSaved={handleUpdateGoalSaved}
+                  onDeleteGoal={handleDeleteGoal}
+                  epfBalance={epfBalance}
+                  onChangeEpfBalance={handleChangeEpfBalance}
                 />
               ) : (
                 <main className="flex-1 flex items-center justify-center text-sm text-slate-500 dark:text-slate-400">
                   Loading finance...
                 </main>
               ))}
+
+            {activeTab === 'stocks' && (
+              <StocksView
+                trades={stockTrades}
+                ltpMap={stockLtpMap}
+                onAddTrade={handleAddStockTrade}
+                onDeleteTrade={handleDeleteStockTrade}
+                onUpdateLtp={handleUpdateStockLtp}
+              />
+            )}
 
             {activeTab === 'reminders' && (
               <RemindersView
@@ -908,6 +1156,21 @@ export default function App() {
             </Suspense>
           )}
 
+          <NewMessageModal
+            isOpen={newMessageOpen}
+            onClose={() => setNewMessageOpen(false)}
+            contacts={contacts}
+            contactsGranted={contactsGranted}
+            onGrantContacts={() => {
+              setContactsGranted(true);
+              saveContactsPermission(true);
+            }}
+            onSaveContact={handleSaveContact}
+            onSend={handleSendNewMessage}
+            simSlots={caps.simSlots}
+            companionMode={prefs.operatingMode === 'companion'}
+          />
+
           <NotificationBanner
             notification={latestNotification}
             onDismiss={() => setLatestNotification(null)}
@@ -941,34 +1204,14 @@ export default function App() {
             </div>
           )}
 
-          {platform === 'android' && !caps.defaultSmsRole && (
-            <div
-              role="region"
-              aria-label="Default SMS app"
-              className="fixed top-[calc(var(--inset-top,0px)+3.5rem)] left-4 right-4 md:left-auto md:right-6 md:w-96 z-40 px-4 py-3 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 shadow-lg"
-            >
-              <p className="font-semibold">Make Snipt your SMS app</p>
-              <p className="mt-1 text-slate-600 dark:text-slate-300">
-                Android lets only the default SMS app receive, send and delete messages. RCS
-                chats stay in Google Messages and end there when you switch; MMS is not supported
-                yet.
-              </p>
-              <button
-                type="button"
-                onClick={handleRequestRole}
-                className="mt-2 px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-900 font-semibold"
-              >
-                Set as default
-              </button>
-            </div>
-          )}
-
           {settingsOpen && (
             <SettingsSheet
               onClose={() => setSettingsOpen(false)}
               themeMode={themeMode}
               onChangeThemeMode={setThemeMode}
               resolvedTheme={theme}
+              colorPalette={prefs.colorPalette}
+              onChangeColorPalette={(p) => patchPrefs({ colorPalette: p })}
               pureBlack={prefs.pureBlack}
               onTogglePureBlack={() => patchPrefs({ pureBlack: !prefs.pureBlack })}
               designStyle={designStyle}
@@ -981,6 +1224,17 @@ export default function App() {
               onToggleAutoTranslate={() =>
                 patchPrefs({ autoTranslateToEnglish: !prefs.autoTranslateToEnglish })
               }
+              operatingMode={prefs.operatingMode}
+              onChangeOperatingMode={(mode) => {
+                patchPrefs({ operatingMode: mode });
+                setNotice(
+                  mode === 'companion'
+                    ? 'RCS Companion Mode active. Google Messages keeps native E2E RCS.'
+                    : 'Default SMS Mode selected. Google Messages RCS will turn off until switched back.'
+                );
+              }}
+              contactsGranted={contactsGranted}
+              onToggleContactsGranted={handleToggleContactsGranted}
               secureScreen={platform === 'android' ? prefs.secureScreen : undefined}
               onToggleSecureScreen={() => patchPrefs({ secureScreen: !prefs.secureScreen })}
               widgetPreviews={platform === 'android' ? prefs.widgetPreviews : undefined}

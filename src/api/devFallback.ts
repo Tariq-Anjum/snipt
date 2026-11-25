@@ -330,13 +330,71 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
       };
     }
     case 'queue_outgoing': {
-      const m = a.message as { threadId?: number; body: string; simSlot: 0 | 1 };
-      if (m.threadId === undefined || !m.body.trim()) throw new Error('invalid input');
-      const before = state.messages.length;
-      state = appendOutgoingReply(state, m.threadId, m.body, m.simSlot, 'SMS');
-      if (state.messages.length === before) throw new Error('invalid input: unknown thread');
+      const m = a.message as {
+        threadId?: number;
+        address?: string;
+        body: string;
+        simSlot: 0 | 1;
+      };
+      const body = (m.body ?? '').trim();
+      if (!body) throw new Error('invalid input');
+
+      if (m.threadId !== undefined) {
+        const before = state.messages.length;
+        state = appendOutgoingReply(state, m.threadId, body, m.simSlot, 'SMS');
+        if (state.messages.length === before) throw new Error('invalid input: unknown thread');
+        touch();
+        const raw = state.messages[state.messages.length - 1];
+        sendStatus.set(raw.id, 'queued');
+        return {
+          message: await view(defaultEngine.analyzeMessage(raw)),
+          thread: rowFor(raw.threadId),
+        };
+      }
+
+      const address = (m.address ?? '').trim();
+      if (!address) throw new Error('invalid input: threadId or address required');
+      const digits = address.replace(/\D/g, '').slice(-10);
+      const existingThread = threads().find((t) => {
+        if (t.sender.toLowerCase() === address.toLowerCase()) return true;
+        if (digits.length === 10) {
+          return t.sender.replace(/\D/g, '').slice(-10) === digits;
+        }
+        return false;
+      });
+
+      if (existingThread) {
+        state = appendOutgoingReply(state, existingThread.threadId, body, m.simSlot, 'SMS');
+        touch();
+        const raw = state.messages[state.messages.length - 1];
+        sendStatus.set(raw.id, 'queued');
+        return {
+          message: await view(defaultEngine.analyzeMessage(raw)),
+          thread: rowFor(raw.threadId),
+        };
+      }
+
+      const nextId = state.messages.reduce((max, item) => Math.max(max, item.id), 0) + 1;
+      const nextThreadId =
+        state.messages.reduce((max, item) => Math.max(max, item.threadId), 0) + 1;
+      const raw = {
+        id: nextId,
+        threadId: nextThreadId,
+        sender: address,
+        body,
+        timestampMs: Date.now(),
+        isKnownContact: true,
+        isRead: true,
+        isOutgoing: true,
+        isStarred: false,
+        simSlot: m.simSlot,
+        protocol: 'SMS' as const,
+      };
+      state = {
+        ...state,
+        messages: [...state.messages, raw],
+      };
       touch();
-      const raw = state.messages[state.messages.length - 1];
       sendStatus.set(raw.id, 'queued');
       return {
         message: await view(defaultEngine.analyzeMessage(raw)),
